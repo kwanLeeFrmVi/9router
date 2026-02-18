@@ -1,16 +1,38 @@
 import { detectFormat, getTargetFormat } from "../services/provider.js";
 import { translateRequest, needsTranslation } from "../translator/index.js";
 import { FORMATS } from "../translator/formats.js";
-import { createSSETransformStreamWithLogger, createPassthroughStreamWithLogger, COLORS } from "../utils/stream.js";
-import { createStreamController, pipeWithDisconnect } from "../utils/streamHandler.js";
-import { addBufferToUsage, filterUsageForFormat } from "../utils/usageTracking.js";
+import {
+  createSSETransformStreamWithLogger,
+  createPassthroughStreamWithLogger,
+  COLORS,
+} from "../utils/stream.js";
+import {
+  createStreamController,
+  pipeWithDisconnect,
+} from "../utils/streamHandler.js";
+import {
+  addBufferToUsage,
+  filterUsageForFormat,
+} from "../utils/usageTracking.js";
 import { refreshWithRetry } from "../services/tokenRefresh.js";
 import { createRequestLogger } from "../utils/requestLogger.js";
-import { getModelTargetFormat, PROVIDER_ID_TO_ALIAS } from "../config/providerModels.js";
-import { createErrorResult, parseUpstreamError, formatProviderError } from "../utils/error.js";
+import {
+  getModelTargetFormat,
+  PROVIDER_ID_TO_ALIAS,
+} from "../config/providerModels.js";
+import {
+  createErrorResult,
+  parseUpstreamError,
+  formatProviderError,
+} from "../utils/error.js";
 import { HTTP_STATUS } from "../config/constants.js";
 import { handleBypassRequest } from "../utils/bypassHandler.js";
-import { saveRequestUsage, trackPendingRequest, appendRequestLog, saveRequestDetail } from "@/lib/usageDb.js";
+import {
+  saveRequestUsage,
+  trackPendingRequest,
+  appendRequestLog,
+  saveRequestDetail,
+} from "@/lib/usageDb.js";
 import { getExecutor } from "../executors/index.js";
 import { convertResponsesStreamToJson } from "../transformer/streamToJsonConverter.js";
 
@@ -18,14 +40,22 @@ import { convertResponsesStreamToJson } from "../transformer/streamToJsonConvert
  * Translate non-streaming response to OpenAI format
  * Handles different provider response formats (Gemini, Claude, etc.)
  */
-function translateNonStreamingResponse(responseBody, targetFormat, sourceFormat) {
+function translateNonStreamingResponse(
+  responseBody,
+  targetFormat,
+  sourceFormat,
+) {
   // If already in source format (usually OpenAI), return as-is
   if (targetFormat === sourceFormat || targetFormat === FORMATS.OPENAI) {
     return responseBody;
   }
 
   // Handle Gemini/Antigravity format
-  if (targetFormat === FORMATS.GEMINI || targetFormat === FORMATS.ANTIGRAVITY || targetFormat === FORMATS.GEMINI_CLI) {
+  if (
+    targetFormat === FORMATS.GEMINI ||
+    targetFormat === FORMATS.ANTIGRAVITY ||
+    targetFormat === FORMATS.GEMINI_CLI
+  ) {
     const response = responseBody.response || responseBody;
     if (!response?.candidates?.[0]) {
       return responseBody; // Can't translate, return raw
@@ -57,8 +87,8 @@ function translateNonStreamingResponse(responseBody, targetFormat, sourceFormat)
             type: "function",
             function: {
               name: part.functionCall.name,
-              arguments: JSON.stringify(part.functionCall.args || {})
-            }
+              arguments: JSON.stringify(part.functionCall.args || {}),
+            },
           });
         }
       }
@@ -89,25 +119,30 @@ function translateNonStreamingResponse(responseBody, targetFormat, sourceFormat)
     const result = {
       id: `chatcmpl-${response.responseId || Date.now()}`,
       object: "chat.completion",
-      created: Math.floor(new Date(response.createTime || Date.now()).getTime() / 1000),
+      created: Math.floor(
+        new Date(response.createTime || Date.now()).getTime() / 1000,
+      ),
       model: response.modelVersion || "gemini",
-      choices: [{
-        index: 0,
-        message,
-        finish_reason: finishReason
-      }]
+      choices: [
+        {
+          index: 0,
+          message,
+          finish_reason: finishReason,
+        },
+      ],
     };
 
     // Add usage if available (match streaming translator: add thoughtsTokenCount to prompt_tokens)
     if (usage) {
       result.usage = {
-        prompt_tokens: (usage.promptTokenCount || 0) + (usage.thoughtsTokenCount || 0),
+        prompt_tokens:
+          (usage.promptTokenCount || 0) + (usage.thoughtsTokenCount || 0),
         completion_tokens: usage.candidatesTokenCount || 0,
-        total_tokens: usage.totalTokenCount || 0
+        total_tokens: usage.totalTokenCount || 0,
       };
       if (usage.thoughtsTokenCount > 0) {
         result.usage.completion_tokens_details = {
-          reasoning_tokens: usage.thoughtsTokenCount
+          reasoning_tokens: usage.thoughtsTokenCount,
         };
       }
     }
@@ -136,8 +171,8 @@ function translateNonStreamingResponse(responseBody, targetFormat, sourceFormat)
           type: "function",
           function: {
             name: block.name,
-            arguments: JSON.stringify(block.input || {})
-          }
+            arguments: JSON.stringify(block.input || {}),
+          },
         });
       }
     }
@@ -165,18 +200,22 @@ function translateNonStreamingResponse(responseBody, targetFormat, sourceFormat)
       object: "chat.completion",
       created: Math.floor(Date.now() / 1000),
       model: responseBody.model || "claude",
-      choices: [{
-        index: 0,
-        message,
-        finish_reason: finishReason
-      }]
+      choices: [
+        {
+          index: 0,
+          message,
+          finish_reason: finishReason,
+        },
+      ],
     };
 
     if (responseBody.usage) {
       result.usage = {
         prompt_tokens: responseBody.usage.input_tokens || 0,
         completion_tokens: responseBody.usage.output_tokens || 0,
-        total_tokens: (responseBody.usage.input_tokens || 0) + (responseBody.usage.output_tokens || 0)
+        total_tokens:
+          (responseBody.usage.input_tokens || 0) +
+          (responseBody.usage.output_tokens || 0),
       };
     }
 
@@ -192,20 +231,31 @@ function translateNonStreamingResponse(responseBody, targetFormat, sourceFormat)
  * Handles different provider response formats
  */
 function extractUsageFromResponse(responseBody, provider) {
-  if (!responseBody || typeof responseBody !== 'object') return null;
+  if (!responseBody || typeof responseBody !== "object") return null;
 
   // Claude format - check first to avoid conflict with OpenAI check
-  if (responseBody.usage && typeof responseBody.usage === 'object' && responseBody.usage.input_tokens !== undefined) {
+  if (
+    responseBody.usage &&
+    typeof responseBody.usage === "object" &&
+    (responseBody.usage.input_tokens !== undefined ||
+      responseBody.usage.output_tokens !== undefined)
+  ) {
     return {
       prompt_tokens: responseBody.usage.input_tokens || 0,
       completion_tokens: responseBody.usage.output_tokens || 0,
       cache_read_input_tokens: responseBody.usage.cache_read_input_tokens,
-      cache_creation_input_tokens: responseBody.usage.cache_creation_input_tokens
+      cache_creation_input_tokens:
+        responseBody.usage.cache_creation_input_tokens,
     };
   }
 
   // OpenAI format
-  if (responseBody.usage && typeof responseBody.usage === 'object' && responseBody.usage.prompt_tokens !== undefined) {
+  if (
+    responseBody.usage &&
+    typeof responseBody.usage === "object" &&
+    (responseBody.usage.prompt_tokens !== undefined ||
+      responseBody.usage.completion_tokens !== undefined)
+  ) {
     return {
       prompt_tokens: responseBody.usage.prompt_tokens || 0,
       completion_tokens: responseBody.usage.completion_tokens || 0,
@@ -215,11 +265,14 @@ function extractUsageFromResponse(responseBody, provider) {
   }
 
   // Gemini format
-  if (responseBody.usageMetadata && typeof responseBody.usageMetadata === 'object') {
+  if (
+    responseBody.usageMetadata &&
+    typeof responseBody.usageMetadata === "object"
+  ) {
     return {
       prompt_tokens: responseBody.usageMetadata.promptTokenCount || 0,
       completion_tokens: responseBody.usageMetadata.candidatesTokenCount || 0,
-      reasoning_tokens: responseBody.usageMetadata.thoughtsTokenCount
+      reasoning_tokens: responseBody.usageMetadata.thoughtsTokenCount,
     };
   }
 
@@ -234,27 +287,43 @@ function extractRequestConfig(body, stream) {
   const config = {
     messages: body.messages || [],
     model: body.model,
-    stream: stream
+    stream: stream,
   };
-  
+
   // Add all optional configuration parameters
   const optionalParams = [
-    'temperature', 'top_p', 'top_k',
-    'max_tokens', 'max_completion_tokens',
-    'thinking', 'reasoning', 'enable_thinking',
-    'presence_penalty', 'frequency_penalty',
-    'seed', 'stop', 'tools', 'tool_choice',
-    'response_format', 'prediction', 'store', 'metadata',
-    'n', 'logprobs', 'top_logprobs', 'logit_bias',
-    'user', 'parallel_tool_calls'
+    "temperature",
+    "top_p",
+    "top_k",
+    "max_tokens",
+    "max_completion_tokens",
+    "thinking",
+    "reasoning",
+    "enable_thinking",
+    "presence_penalty",
+    "frequency_penalty",
+    "seed",
+    "stop",
+    "tools",
+    "tool_choice",
+    "response_format",
+    "prediction",
+    "store",
+    "metadata",
+    "n",
+    "logprobs",
+    "top_logprobs",
+    "logit_bias",
+    "user",
+    "parallel_tool_calls",
   ];
-  
+
   for (const param of optionalParams) {
     if (body[param] !== undefined) {
       config[param] = body[param];
     }
   }
-  
+
   return config;
 }
 
@@ -293,7 +362,10 @@ function parseSSEToOpenAIResponse(rawSSE, fallbackModel) {
     if (typeof delta.content === "string" && delta.content.length > 0) {
       contentParts.push(delta.content);
     }
-    if (typeof delta.reasoning_content === "string" && delta.reasoning_content.length > 0) {
+    if (
+      typeof delta.reasoning_content === "string" &&
+      delta.reasoning_content.length > 0
+    ) {
       reasoningParts.push(delta.reasoning_content);
     }
     if (choice?.finish_reason) {
@@ -306,7 +378,7 @@ function parseSSEToOpenAIResponse(rawSSE, fallbackModel) {
 
   const message = {
     role: "assistant",
-    content: contentParts.join("")
+    content: contentParts.join(""),
   };
   if (reasoningParts.length > 0) {
     message.reasoning_content = reasoningParts.join("");
@@ -321,9 +393,9 @@ function parseSSEToOpenAIResponse(rawSSE, fallbackModel) {
       {
         index: 0,
         message,
-        finish_reason: finishReason
-      }
-    ]
+        finish_reason: finishReason,
+      },
+    ],
   };
 
   if (usage) {
@@ -347,7 +419,19 @@ function parseSSEToOpenAIResponse(rawSSE, fallbackModel) {
  * @param {string} options.connectionId - Connection ID for usage tracking
  * @param {string} options.apiKey - API key for usage tracking
  */
-export async function handleChatCore({ body, modelInfo, credentials, log, onCredentialsRefreshed, onRequestSuccess, onDisconnect, clientRawRequest, connectionId, userAgent, apiKey }) {
+export async function handleChatCore({
+  body,
+  modelInfo,
+  credentials,
+  log,
+  onCredentialsRefreshed,
+  onRequestSuccess,
+  onDisconnect,
+  clientRawRequest,
+  connectionId,
+  userAgent,
+  apiKey,
+}) {
   const { provider, model } = modelInfo;
   const requestStartTime = Date.now();
 
@@ -368,31 +452,48 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
 
   // Track if client actually wants streaming (before we force it for providers)
   const clientRequestedStreaming = body.stream === true;
-  const providerRequiresStreaming = provider === 'openai' || provider === 'codex';
+  const providerRequiresStreaming =
+    provider === "openai" || provider === "codex";
 
   // Force streaming for OpenAI/Codex models (they don't support non-streaming mode properly)
-  const stream = providerRequiresStreaming ? true : (body.stream !== false);
+  const stream = providerRequiresStreaming ? true : body.stream !== false;
 
   // Create request logger for this session: sourceFormat_targetFormat_model
-  const reqLogger = await createRequestLogger(sourceFormat, targetFormat, model);
+  const reqLogger = await createRequestLogger(
+    sourceFormat,
+    targetFormat,
+    model,
+  );
 
   // 0. Log client raw request (before any conversion)
   if (clientRawRequest) {
     reqLogger.logClientRawRequest(
       clientRawRequest.endpoint,
       clientRawRequest.body,
-      clientRawRequest.headers
+      clientRawRequest.headers,
     );
   }
 
   // 1. Log raw request from client
   reqLogger.logRawRequest(body);
 
-  log?.debug?.("FORMAT", `${sourceFormat} → ${targetFormat} | stream=${stream}`);
+  log?.debug?.(
+    "FORMAT",
+    `${sourceFormat} → ${targetFormat} | stream=${stream}`,
+  );
 
   // Translate request (pass reqLogger for intermediate logging)
   let translatedBody = body;
-  translatedBody = translateRequest(sourceFormat, targetFormat, model, body, stream, credentials, provider, reqLogger);
+  translatedBody = translateRequest(
+    sourceFormat,
+    targetFormat,
+    model,
+    body,
+    stream,
+    credentials,
+    provider,
+    reqLogger,
+  );
 
   // Extract toolNameMap for response translation (Claude OAuth)
   const toolNameMap = translatedBody._toolNameMap;
@@ -408,16 +509,22 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   trackPendingRequest(model, provider, connectionId, true);
 
   // Log start
-  appendRequestLog({ model, provider, connectionId, status: "PENDING" }).catch(() => { });
+  appendRequestLog({ model, provider, connectionId, status: "PENDING" }).catch(
+    () => { },
+  );
 
-  const msgCount = translatedBody.messages?.length
-    || translatedBody.contents?.length
-    || translatedBody.request?.contents?.length
-    || 0;
-  log?.debug?.("REQUEST", `${provider.toUpperCase()} | ${model} | ${msgCount} msgs`);
+  const msgCount =
+    translatedBody.messages?.length ||
+    translatedBody.contents?.length ||
+    translatedBody.request?.contents?.length ||
+    0;
+  log?.debug?.(
+    "REQUEST",
+    `${provider.toUpperCase()} | ${model} | ${msgCount} msgs`,
+  );
 
   // Create stream controller for disconnect detection
-  const streamController = createStreamController({ 
+  const streamController = createStreamController({
     onDisconnect: (reason) => {
       // Track request finished (disconnected)
       trackPendingRequest(model, provider, connectionId, false);
@@ -429,7 +536,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     },
     log,
     provider,
-    model
+    model,
   });
 
   // Execute request using executor (handles URL building, headers, fallback, transform)
@@ -445,7 +552,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
       stream,
       credentials,
       signal: streamController.signal,
-      log
+      log,
     });
 
     providerResponse = result.response;
@@ -455,10 +562,14 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
 
     // Log target request (final request to provider)
     reqLogger.logTargetRequest(providerUrl, providerHeaders, finalBody);
-
   } catch (error) {
     trackPendingRequest(model, provider, connectionId, false, true);
-    appendRequestLog({ model, provider, connectionId, status: `FAILED ${error.name === "AbortError" ? 499 : HTTP_STATUS.BAD_GATEWAY}` }).catch(() => { });
+    appendRequestLog({
+      model,
+      provider,
+      connectionId,
+      status: `FAILED ${error.name === "AbortError" ? 499 : HTTP_STATUS.BAD_GATEWAY}`,
+    }).catch(() => { });
 
     const errorDetail = {
       provider: provider || "unknown",
@@ -473,27 +584,35 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
       response: {
         error: error.message || String(error),
         status: error.name === "AbortError" ? 499 : 502,
-        thinking: null
+        thinking: null,
       },
-      status: "error"
+      status: "error",
     };
-    saveRequestDetail(errorDetail).catch(() => {});
+    saveRequestDetail(errorDetail).catch(() => { });
 
     if (error.name === "AbortError") {
       streamController.handleError(error);
       return createErrorResult(499, "Request aborted");
     }
-    const errMsg = formatProviderError(error, provider, model, HTTP_STATUS.BAD_GATEWAY);
+    const errMsg = formatProviderError(
+      error,
+      provider,
+      model,
+      HTTP_STATUS.BAD_GATEWAY,
+    );
     console.log(`${COLORS.red}[ERROR] ${errMsg}${COLORS.reset}`);
     return createErrorResult(HTTP_STATUS.BAD_GATEWAY, errMsg);
   }
 
   // Handle 401/403 - try token refresh using executor
-  if (providerResponse.status === HTTP_STATUS.UNAUTHORIZED || providerResponse.status === HTTP_STATUS.FORBIDDEN) {
+  if (
+    providerResponse.status === HTTP_STATUS.UNAUTHORIZED ||
+    providerResponse.status === HTTP_STATUS.FORBIDDEN
+  ) {
     const newCredentials = await refreshWithRetry(
       () => executor.refreshCredentials(credentials, log),
       3,
-      log
+      log,
     );
 
     if (newCredentials?.accessToken || newCredentials?.copilotToken) {
@@ -515,7 +634,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
           stream,
           credentials,
           signal: streamController.signal,
-          log
+          log,
         });
 
         if (retryResult.response.ok) {
@@ -523,7 +642,10 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
           providerUrl = retryResult.url;
         }
       } catch (retryError) {
-        log?.warn?.("TOKEN", `${provider.toUpperCase()} | retry after refresh failed`);
+        log?.warn?.(
+          "TOKEN",
+          `${provider.toUpperCase()} | retry after refresh failed`,
+        );
       }
     } else {
       log?.warn?.("TOKEN", `${provider.toUpperCase()} | refresh failed`);
@@ -533,8 +655,16 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   // Check provider response - return error info for fallback handling
   if (!providerResponse.ok) {
     trackPendingRequest(model, provider, connectionId, false, true);
-    const { statusCode, message, retryAfterMs } = await parseUpstreamError(providerResponse, provider);
-    appendRequestLog({ model, provider, connectionId, status: `FAILED ${statusCode}` }).catch(() => { });
+    const { statusCode, message, retryAfterMs } = await parseUpstreamError(
+      providerResponse,
+      provider,
+    );
+    appendRequestLog({
+      model,
+      provider,
+      connectionId,
+      status: `FAILED ${statusCode}`,
+    }).catch(() => { });
 
     const errorDetail = {
       provider: provider || "unknown",
@@ -549,19 +679,27 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
       response: {
         error: message,
         status: statusCode,
-        thinking: null
+        thinking: null,
       },
-      status: "error"
+      status: "error",
     };
-    saveRequestDetail(errorDetail).catch(() => {});
+    saveRequestDetail(errorDetail).catch(() => { });
 
-    const errMsg = formatProviderError(new Error(message), provider, model, statusCode);
+    const errMsg = formatProviderError(
+      new Error(message),
+      provider,
+      model,
+      statusCode,
+    );
     console.log(`${COLORS.red}[ERROR] ${errMsg}${COLORS.reset}`);
 
     // Log Antigravity retry time if available
     if (retryAfterMs && provider === "antigravity") {
       const retrySeconds = Math.ceil(retryAfterMs / 1000);
-      log?.debug?.("RETRY", `Antigravity quota reset in ${retrySeconds}s (${retryAfterMs}ms)`);
+      log?.debug?.(
+        "RETRY",
+        `Antigravity quota reset in ${retrySeconds}s (${retryAfterMs}ms)`,
+      );
     }
 
     // Log error with full request body for debugging
@@ -577,32 +715,48 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
 
     // Treat as SSE if content-type says so OR if it's empty/missing
     // (Codex API doesn't always set Content-Type on streaming responses)
-    const isSSEResponse = contentType.includes("text/event-stream") || (contentType === "" && provider === "codex");
+    const isSSEResponse =
+      contentType.includes("text/event-stream") ||
+      (contentType === "" && provider === "codex");
     if (isSSEResponse) {
-      const isResponsesApi = sourceFormat === 'openai-responses';
+      const isResponsesApi = targetFormat === "openai-responses";
 
       if (isResponsesApi) {
         // Responses API SSE → Responses API JSON (for pydantic_ai, OpenAI SDK, etc.)
         try {
-          const jsonResponse = await convertResponsesStreamToJson(providerResponse.body);
-          log?.info?.("STREAM", `Converted Responses API SSE → JSON for non-streaming client`);
+          const jsonResponse = await convertResponsesStreamToJson(
+            providerResponse.body,
+          );
+          log?.info?.(
+            "STREAM",
+            `Converted Responses API SSE → JSON for non-streaming client`,
+          );
 
           if (onRequestSuccess) await onRequestSuccess();
 
           const usage = jsonResponse.usage || {};
-          appendRequestLog({ model, provider, connectionId, tokens: usage, status: "200 OK" }).catch(() => { });
+          appendRequestLog({
+            model,
+            provider,
+            connectionId,
+            tokens: usage,
+            status: "200 OK",
+          }).catch(() => { });
 
-          if (usage && typeof usage === 'object') {
+          if (usage && typeof usage === "object") {
             const msg = `[${new Date().toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit" })}] 📊 [USAGE] ${provider.toUpperCase()} | in=${usage?.input_tokens || 0} | out=${usage?.output_tokens || 0}${connectionId ? ` | account=${connectionId.slice(0, 8)}...` : ""}`;
             console.log(`${COLORS.green}${msg}${COLORS.reset}`);
 
             saveRequestUsage({
               provider: provider || "unknown",
               model: model || "unknown",
-              tokens: { prompt_tokens: usage.input_tokens || 0, completion_tokens: usage.output_tokens || 0 },
+              tokens: {
+                prompt_tokens: usage.input_tokens || 0,
+                completion_tokens: usage.output_tokens || 0,
+              },
               timestamp: new Date().toISOString(),
               connectionId: connectionId || undefined,
-              apiKey: apiKey || undefined
+              apiKey: apiKey || undefined,
             }).catch(() => { });
           }
 
@@ -613,31 +767,76 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
             connectionId: connectionId || undefined,
             timestamp: new Date().toISOString(),
             latency: { ttft: totalLatency, total: totalLatency },
-            tokens: { prompt_tokens: usage.input_tokens || 0, completion_tokens: usage.output_tokens || 0 },
+            tokens: {
+              prompt_tokens: usage.input_tokens || 0,
+              completion_tokens: usage.output_tokens || 0,
+            },
             request: extractRequestConfig(body, stream),
             providerRequest: finalBody || translatedBody || null,
             providerResponse: null,
             response: {
               content: jsonResponse.output?.[0]?.content?.[0]?.text || null,
               thinking: null,
-              finish_reason: jsonResponse.status || "unknown"
+              finish_reason: jsonResponse.status || "unknown",
             },
             status: "success",
             endpoint: clientRawRequest?.endpoint || null
           }).catch(() => { });
 
+          // If client sent a Chat Completions request (not Responses API),
+          // translate the Responses API JSON back to Chat Completions format
+          let finalResponse = jsonResponse;
+          if (sourceFormat !== "openai-responses") {
+            const textContent = (jsonResponse.output || [])
+              .filter((item) => item.type === "message")
+              .flatMap((item) => item.content || [])
+              .filter((c) => c.type === "output_text" || c.type === "text")
+              .map((c) => c.text || "")
+              .join("");
+
+            finalResponse = {
+              id: jsonResponse.id
+                ? jsonResponse.id.replace(/^resp_/, "chatcmpl-")
+                : `chatcmpl-${Date.now()}`,
+              object: "chat.completion",
+              created: jsonResponse.created_at || Math.floor(Date.now() / 1000),
+              model: model || "unknown",
+              choices: [
+                {
+                  index: 0,
+                  message: { role: "assistant", content: textContent },
+                  finish_reason:
+                    jsonResponse.status === "completed" ? "stop" : "stop",
+                },
+              ],
+              usage: usage
+                ? {
+                  prompt_tokens: usage.input_tokens || 0,
+                  completion_tokens: usage.output_tokens || 0,
+                  total_tokens: usage.total_tokens || 0,
+                }
+                : undefined,
+            };
+          }
+
           return {
             success: true,
-            response: new Response(JSON.stringify(jsonResponse), {
+            response: new Response(JSON.stringify(finalResponse), {
               headers: {
                 "Content-Type": "application/json",
-                "Access-Control-Allow-Origin": "*"
-              }
-            })
+                "Access-Control-Allow-Origin": "*",
+              },
+            }),
           };
         } catch (error) {
-          console.error("[ChatCore] Responses API SSE→JSON conversion failed:", error);
-          return createErrorResult(HTTP_STATUS.BAD_GATEWAY, "Failed to convert streaming response to JSON");
+          console.error(
+            "[ChatCore] Responses API SSE→JSON conversion failed:",
+            error,
+          );
+          return createErrorResult(
+            HTTP_STATUS.BAD_GATEWAY,
+            "Failed to convert streaming response to JSON",
+          );
         }
       } else {
         // Chat Completions SSE → Chat Completions JSON
@@ -648,7 +847,13 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
             if (onRequestSuccess) await onRequestSuccess();
 
             const usage = parsed.usage || {};
-            appendRequestLog({ model, provider, connectionId, tokens: usage, status: "200 OK" }).catch(() => { });
+            appendRequestLog({
+              model,
+              provider,
+              connectionId,
+              tokens: usage,
+              status: "200 OK",
+            }).catch(() => { });
 
             if (usage && typeof usage === "object") {
               saveRequestUsage({
@@ -675,8 +880,9 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
               providerResponse: null,
               response: {
                 content: parsed.choices?.[0]?.message?.content || null,
-                thinking: parsed.choices?.[0]?.message?.reasoning_content || null,
-                finish_reason: parsed.choices?.[0]?.finish_reason || "unknown"
+                thinking:
+                  parsed.choices?.[0]?.message?.reasoning_content || null,
+                finish_reason: parsed.choices?.[0]?.finish_reason || "unknown",
               },
               status: "success",
               endpoint: clientRawRequest?.endpoint || null
@@ -687,15 +893,24 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
               response: new Response(JSON.stringify(parsed), {
                 headers: {
                   "Content-Type": "application/json",
-                  "Access-Control-Allow-Origin": "*"
-                }
-              })
+                  "Access-Control-Allow-Origin": "*",
+                },
+              }),
             };
           }
-          return createErrorResult(HTTP_STATUS.BAD_GATEWAY, "Invalid SSE response for non-streaming request");
+          return createErrorResult(
+            HTTP_STATUS.BAD_GATEWAY,
+            "Invalid SSE response for non-streaming request",
+          );
         } catch (error) {
-          console.error("[ChatCore] Chat Completions SSE→JSON conversion failed:", error);
-          return createErrorResult(HTTP_STATUS.BAD_GATEWAY, "Failed to convert streaming response to JSON");
+          console.error(
+            "[ChatCore] Chat Completions SSE→JSON conversion failed:",
+            error,
+          );
+          return createErrorResult(
+            HTTP_STATUS.BAD_GATEWAY,
+            "Failed to convert streaming response to JSON",
+          );
         }
       }
     }
@@ -712,17 +927,36 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
       const sseText = await providerResponse.text();
       const parsedFromSSE = parseSSEToOpenAIResponse(sseText, model);
       if (!parsedFromSSE) {
-        appendRequestLog({ model, provider, connectionId, status: `FAILED ${HTTP_STATUS.BAD_GATEWAY}` }).catch(() => { });
-        return createErrorResult(HTTP_STATUS.BAD_GATEWAY, "Invalid SSE response for non-streaming request");
+        appendRequestLog({
+          model,
+          provider,
+          connectionId,
+          status: `FAILED ${HTTP_STATUS.BAD_GATEWAY}`,
+        }).catch(() => { });
+        return createErrorResult(
+          HTTP_STATUS.BAD_GATEWAY,
+          "Invalid SSE response for non-streaming request",
+        );
       }
       responseBody = parsedFromSSE;
     } else {
       try {
         responseBody = await providerResponse.json();
       } catch (parseError) {
-        appendRequestLog({ model, provider, connectionId, status: `FAILED ${HTTP_STATUS.BAD_GATEWAY}` }).catch(() => { });
-        console.error(`[ChatCore] Failed to parse JSON response from ${provider}:`, parseError.message);
-        return createErrorResult(HTTP_STATUS.BAD_GATEWAY, `Invalid JSON response from ${provider}`);
+        appendRequestLog({
+          model,
+          provider,
+          connectionId,
+          status: `FAILED ${HTTP_STATUS.BAD_GATEWAY}`,
+        }).catch(() => { });
+        console.error(
+          `[ChatCore] Failed to parse JSON response from ${provider}:`,
+          parseError.message,
+        );
+        return createErrorResult(
+          HTTP_STATUS.BAD_GATEWAY,
+          `Invalid JSON response from ${provider}`,
+        );
       }
     }
 
@@ -741,8 +975,14 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
 
     // Log usage for non-streaming responses
     const usage = extractUsageFromResponse(responseBody, provider);
-    appendRequestLog({ model, provider, connectionId, tokens: usage, status: "200 OK" }).catch(() => { });
-    if (usage && typeof usage === 'object') {
+    appendRequestLog({
+      model,
+      provider,
+      connectionId,
+      tokens: usage,
+      status: "200 OK",
+    }).catch(() => { });
+    if (usage && typeof usage === "object") {
       const msg = `[${new Date().toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit" })}] 📊 [USAGE] ${provider.toUpperCase()} | in=${usage?.prompt_tokens || 0} | out=${usage?.completion_tokens || 0}${connectionId ? ` | account=${connectionId.slice(0, 8)}...` : ""}`;
       console.log(`${COLORS.green}${msg}${COLORS.reset}`);
 
@@ -754,7 +994,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
         connectionId: connectionId || undefined,
         apiKey: apiKey || undefined,
         endpoint: clientRawRequest?.endpoint || null
-      }).catch(err => {
+      }).catch((err) => {
         console.error("Failed to save usage stats:", err.message);
       });
     }
@@ -797,27 +1037,30 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
       timestamp: new Date().toISOString(),
       latency: {
         ttft: totalLatency,
-        total: totalLatency
+        total: totalLatency,
       },
       tokens: usage || { prompt_tokens: 0, completion_tokens: 0 },
       request: extractRequestConfig(body, stream),
       providerRequest: finalBody || translatedBody || null,
       providerResponse: responseBody || null,
       response: {
-        content: translatedResponse?.choices?.[0]?.message?.content ||
-                 translatedResponse?.content ||
-                 null,
-        thinking: translatedResponse?.choices?.[0]?.message?.reasoning_content ||
-                  translatedResponse?.reasoning_content ||
-                  null,
-        finish_reason: translatedResponse?.choices?.[0]?.finish_reason || "unknown"
+        content:
+          translatedResponse?.choices?.[0]?.message?.content ||
+          translatedResponse?.content ||
+          null,
+        thinking:
+          translatedResponse?.choices?.[0]?.message?.reasoning_content ||
+          translatedResponse?.reasoning_content ||
+          null,
+        finish_reason:
+          translatedResponse?.choices?.[0]?.finish_reason || "unknown",
       },
       status: "success",
       endpoint: clientRawRequest?.endpoint || null
     };
 
     // Async save (don't block response)
-    saveRequestDetail(requestDetail).catch(err => {
+    saveRequestDetail(requestDetail).catch((err) => {
       console.error("[RequestDetail] Failed to save:", err.message);
     });
 
@@ -826,9 +1069,9 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
       response: new Response(JSON.stringify(translatedResponse), {
         headers: {
           "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*"
-        }
-      })
+          "Access-Control-Allow-Origin": "*",
+        },
+      }),
     };
   }
 
@@ -842,26 +1085,28 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   const responseHeaders = {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
-    "Connection": "keep-alive",
-    "Access-Control-Allow-Origin": "*"
+    Connection: "keep-alive",
+    "Access-Control-Allow-Origin": "*",
   };
 
   let streamContent = "";
   let streamUsage = null;
   const streamDetailId = `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
-  
+
   const onStreamComplete = (contentObj, usage, ttftAt) => {
     // contentObj is object { content, thinking }
     streamUsage = usage;
-    
+
     const updatedDetail = {
       provider: provider || "unknown",
       model: model || "unknown",
       connectionId: connectionId || undefined,
       timestamp: new Date().toISOString(),
       latency: {
-        ttft: ttftAt ? ttftAt - requestStartTime : Date.now() - requestStartTime,
-        total: Date.now() - requestStartTime
+        ttft: ttftAt
+          ? ttftAt - requestStartTime
+          : Date.now() - requestStartTime,
+        total: Date.now() - requestStartTime,
       },
       tokens: usage || { prompt_tokens: 0, completion_tokens: 0 },
       request: extractRequestConfig(body, stream),
@@ -870,18 +1115,25 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
       response: {
         content: contentObj.content || "[Empty streaming response]",
         thinking: contentObj.thinking || null,
-        type: "streaming"
+        type: "streaming",
       },
       status: "success",
-      id: streamDetailId
+      id: streamDetailId,
     };
-    
-    saveRequestDetail(updatedDetail).catch(err => {
-      console.error("[RequestDetail] Failed to update streaming content:", err.message);
+
+    saveRequestDetail(updatedDetail).catch((err) => {
+      console.error(
+        "[RequestDetail] Failed to update streaming content:",
+        err.message,
+      );
     });
 
     // Save usage stats for dashboard (skip if no real token data to avoid duplicates)
-    if (usage && typeof usage === 'object' && (usage.prompt_tokens > 0 || usage.completion_tokens > 0)) {
+    if (
+      usage &&
+      typeof usage === "object" &&
+      (usage.prompt_tokens > 0 || usage.completion_tokens > 0)
+    ) {
       const msg = `[${new Date().toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit" })}] 📊 [STREAM USAGE] ${provider.toUpperCase()} | in=${usage?.prompt_tokens || 0} | out=${usage?.completion_tokens || 0}${connectionId ? ` | account=${connectionId.slice(0, 8)}...` : ""}`;
       console.log(`${COLORS.green}${msg}${COLORS.reset}`);
 
@@ -893,33 +1145,75 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
         connectionId: connectionId || undefined,
         apiKey: apiKey || undefined,
         endpoint: clientRawRequest?.endpoint || null
-      }).catch(err => {
+      }).catch((err) => {
         console.error("Failed to save streaming usage stats:", err.message);
       });
     }
   };
 
   let transformStream;
-  const isDroidCLI = userAgent?.toLowerCase().includes('droid') || userAgent?.toLowerCase().includes('codex-cli');
-  const needsCodexTranslation = provider === 'codex'
-    && targetFormat === 'openai-responses'
-    && !isDroidCLI;
+  const isDroidCLI =
+    userAgent?.toLowerCase().includes("droid") ||
+    userAgent?.toLowerCase().includes("codex-cli");
+  const needsCodexTranslation =
+    provider === "codex" && targetFormat === "openai-responses" && !isDroidCLI;
 
   if (needsCodexTranslation) {
     // For claude clients, translate directly to claude format
     // For openai/openai-responses clients, translate to openai (responsesHandler will re-add event: lines)
-    const codexTarget = sourceFormat === FORMATS.CLAUDE ? FORMATS.CLAUDE : FORMATS.OPENAI;
-    log?.debug?.("STREAM", `Codex translation mode: openai-responses → ${codexTarget}`);
-    transformStream = createSSETransformStreamWithLogger('openai-responses', codexTarget, provider, reqLogger, toolNameMap, model, connectionId, body, onStreamComplete, apiKey);
+    const codexTarget =
+      sourceFormat === FORMATS.CLAUDE ? FORMATS.CLAUDE : FORMATS.OPENAI;
+    log?.debug?.(
+      "STREAM",
+      `Codex translation mode: openai-responses → ${codexTarget}`,
+    );
+    transformStream = createSSETransformStreamWithLogger(
+      "openai-responses",
+      codexTarget,
+      provider,
+      reqLogger,
+      toolNameMap,
+      model,
+      connectionId,
+      body,
+      onStreamComplete,
+      apiKey,
+    );
   } else if (needsTranslation(targetFormat, sourceFormat)) {
-    log?.debug?.("STREAM", `Translation mode: ${targetFormat} → ${sourceFormat}`);
-    transformStream = createSSETransformStreamWithLogger(targetFormat, sourceFormat, provider, reqLogger, toolNameMap, model, connectionId, body, onStreamComplete, apiKey);
+    log?.debug?.(
+      "STREAM",
+      `Translation mode: ${targetFormat} → ${sourceFormat}`,
+    );
+    transformStream = createSSETransformStreamWithLogger(
+      targetFormat,
+      sourceFormat,
+      provider,
+      reqLogger,
+      toolNameMap,
+      model,
+      connectionId,
+      body,
+      onStreamComplete,
+      apiKey,
+    );
   } else {
     log?.debug?.("STREAM", `Standard passthrough mode`);
-    transformStream = createPassthroughStreamWithLogger(provider, reqLogger, model, connectionId, body, onStreamComplete, apiKey);
+    transformStream = createPassthroughStreamWithLogger(
+      provider,
+      reqLogger,
+      model,
+      connectionId,
+      body,
+      onStreamComplete,
+      apiKey,
+    );
   }
 
-  const transformedBody = pipeWithDisconnect(providerResponse, transformStream, streamController);
+  const transformedBody = pipeWithDisconnect(
+    providerResponse,
+    transformStream,
+    streamController,
+  );
 
   const totalLatency = Date.now() - requestStartTime;
   const streamingDetail = {
@@ -929,7 +1223,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     timestamp: new Date().toISOString(),
     latency: {
       ttft: 0,
-      total: Date.now() - requestStartTime
+      total: Date.now() - requestStartTime,
     },
     tokens: { prompt_tokens: 0, completion_tokens: 0 },
     request: extractRequestConfig(body, stream),
@@ -938,21 +1232,24 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     response: {
       content: "[Streaming in progress...]",
       thinking: null,
-      type: "streaming"
+      type: "streaming",
     },
     status: "success",
-    id: streamDetailId
+    id: streamDetailId,
   };
 
-  saveRequestDetail(streamingDetail).catch(err => {
-    console.error("[RequestDetail] Failed to save streaming request:", err.message);
+  saveRequestDetail(streamingDetail).catch((err) => {
+    console.error(
+      "[RequestDetail] Failed to save streaming request:",
+      err.message,
+    );
   });
 
   return {
     success: true,
     response: new Response(transformedBody, {
-      headers: responseHeaders
-    })
+      headers: responseHeaders,
+    }),
   };
 }
 
