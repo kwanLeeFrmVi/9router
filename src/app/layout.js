@@ -14,6 +14,7 @@ export const metadata = {
   icons: {
     icon: "/favicon.svg",
   },
+  themeColor: "#0a0a0a",
 };
 
 export default function RootLayout({ children }) {
