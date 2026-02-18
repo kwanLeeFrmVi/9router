@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "bun --bun next dev --webpack --port 20128",
     "build": "NODE_ENV=production bun --bun next build --webpack",
-    "start": "NODE_ENV=production bun ./.next/standalone/server.js"
+    "start": "NODE_ENV=production bun --bun next start"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
