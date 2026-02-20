@@ -70,6 +70,8 @@ export const PROVIDER_MODELS = {
     { id: "gemini-3-1-pro-low", name: "Gemini 3.1 Pro Low" },
     { id: "gemini-3-pro-high", name: "Gemini 3 Pro High" },
     { id: "gemini-3-pro-low", name: "Gemini 3 Pro Low" },
+    { id: "gemini-3.1-pro-high", name: "Gemini 3.1 Pro High" },
+    { id: "gemini-3.1-pro-low", name: "Gemini 3.1 Pro Low" },
     { id: "gemini-3-flash", name: "Gemini 3 Flash" },
     { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
     { id: "claude-opus-4-6-thinking", name: "Claude Opus 4.6 Thinking" },

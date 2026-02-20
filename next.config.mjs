@@ -6,15 +6,11 @@ const nextConfig = {
   },
   env: {
   },
-  webpack: (config, { isServer }) => {
-    // Ignore fs/path modules in browser bundle
-    if (!isServer) {
-      config.resolve.fallback = {
-        ...config.resolve.fallback,
-        fs: false,
-        path: false,
-      };
+  experimental: {
+    turbo: {
     }
+  },
+  webpack: (config, { isServer }) => {
     // Stop watching logs directory to prevent HMR during streaming
     config.watchOptions = { ...config.watchOptions, ignored: /[\\/](logs|\.next)[\\/]/ };
     return config;
