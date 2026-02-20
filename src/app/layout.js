@@ -19,6 +19,9 @@ export const metadata = {
   icons: {
     icon: "/favicon.svg",
   },
+};
+
+export const viewport = {
   themeColor: "#0a0a0a",
 };
 
