@@ -847,7 +847,10 @@ export async function handleChatCore({
               finish_reason: jsonResponse.status || "unknown",
             },
             status: "success",
+<<<<<<< HEAD
             endpoint: clientRawRequest?.endpoint || null
+=======
+>>>>>>> 75d1169 (fix(translator): fix OpenAI Responses API translation to Claude format)
           }).catch(() => { });
 
           // If client sent a Chat Completions request (not Responses API),
@@ -884,6 +887,11 @@ export async function handleChatCore({
                 }
                 : undefined,
             };
+
+            // Translate further to Claude format if client expects it
+            if (sourceFormat === FORMATS.CLAUDE) {
+              finalResponse = convertOpenAIToClaude(finalResponse);
+            }
           }
 
           return {
@@ -930,7 +938,10 @@ export async function handleChatCore({
                 timestamp: new Date().toISOString(),
                 connectionId: connectionId || undefined,
                 apiKey: apiKey || undefined,
+<<<<<<< HEAD
                 endpoint: clientRawRequest?.endpoint || null
+=======
+>>>>>>> 75d1169 (fix(translator): fix OpenAI Responses API translation to Claude format)
               }).catch(() => { });
             }
 
@@ -952,7 +963,10 @@ export async function handleChatCore({
                 finish_reason: parsed.choices?.[0]?.finish_reason || "unknown",
               },
               status: "success",
+<<<<<<< HEAD
               endpoint: clientRawRequest?.endpoint || null
+=======
+>>>>>>> 75d1169 (fix(translator): fix OpenAI Responses API translation to Claude format)
             }).catch(() => { });
 
             return {
@@ -1298,50 +1312,90 @@ export async function handleChatCore({
       apiKey,
     );
   }
-
-  const transformedBody = pipeWithDisconnect(
-    providerResponse,
-    transformStream,
-    streamController,
+  targetFormat,
+    sourceFormat,
+    provider,
+    reqLogger,
+    toolNameMap,
+    model,
+    connectionId,
+    body,
+    onStreamComplete,
+    apiKey,
+      );
+} else if (targetFormat !== FORMATS.OPENAI) {
+  // Same format but NOT openai (e.g. claude→claude, gemini→gemini).
+  // Use translate mode so auto-detection can kick in if upstream
+  // actually returns a different format than configured.
+  log?.debug?.("STREAM", `Translate mode (auto-detect): ${targetFormat} → ${sourceFormat}`);
+  transformStream = createSSETransformStreamWithLogger(
+    targetFormat,
+    sourceFormat,
+    provider,
+    reqLogger,
+    toolNameMap,
+    model,
+    connectionId,
+    body,
+    onStreamComplete,
+    apiKey,
   );
-
-  const totalLatency = Date.now() - requestStartTime;
-  const streamingDetail = {
-    provider: provider || "unknown",
-    model: model || "unknown",
-    connectionId: connectionId || undefined,
-    timestamp: new Date().toISOString(),
-    latency: {
-      ttft: 0,
-      total: Date.now() - requestStartTime,
-    },
-    tokens: { prompt_tokens: 0, completion_tokens: 0 },
-    request: extractRequestConfig(body, stream),
-    providerRequest: finalBody || translatedBody || null,
-    providerResponse: "[Streaming - raw response not captured]",
-    response: {
-      content: "[Streaming in progress...]",
-      thinking: null,
-      type: "streaming",
-    },
-    status: "success",
-    id: streamDetailId,
-  };
-
-  saveRequestDetail(streamingDetail).catch((err) => {
-    console.error(
-      "[RequestDetail] Failed to save streaming request:",
-      err.message,
-    );
-  });
-
-  return {
-    success: true,
-    response: new Response(transformedBody, {
-      headers: responseHeaders,
-    }),
-  };
+} else {
+  log?.debug?.("STREAM", `Standard passthrough mode`);
+  transformStream = createPassthroughStreamWithLogger(
+    provider,
+    reqLogger,
+    model,
+    connectionId,
+    body,
+    onStreamComplete,
+    apiKey,
+  );
 }
+
+const transformedBody = pipeWithDisconnect(
+  providerResponse,
+  transformStream,
+  streamController,
+);
+
+const totalLatency = Date.now() - requestStartTime;
+const streamingDetail = {
+  provider: provider || "unknown",
+  model: model || "unknown",
+  connectionId: connectionId || undefined,
+  timestamp: new Date().toISOString(),
+  latency: {
+    ttft: 0,
+    total: Date.now() - requestStartTime,
+  },
+  tokens: { prompt_tokens: 0, completion_tokens: 0 },
+  request: extractRequestConfig(body, stream),
+  providerRequest: finalBody || translatedBody || null,
+  providerResponse: "[Streaming - raw response not captured]",
+  response: {
+    content: "[Streaming in progress...]",
+    thinking: null,
+    type: "streaming",
+  },
+  status: "success",
+  id: streamDetailId,
+};
+
+saveRequestDetail(streamingDetail).catch((err) => {
+  console.error(
+    "[RequestDetail] Failed to save streaming request:",
+    err.message,
+  );
+});
+
+return {
+  success: true,
+  response: new Response(transformedBody, {
+    headers: responseHeaders,
+  }),
+};
+  }
 
 /**
  * Check if token is expired or about to expire
