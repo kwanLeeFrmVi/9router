@@ -1,4 +1,5 @@
-const { spawn, exec } = require("child_process");
+const cp = require("child_process");
+const { exec } = cp;
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
@@ -32,7 +33,7 @@ function isProcessAlive(pid) {
 function killProcess(pid, force = false) {
   if (IS_WIN) {
     const flag = force ? "/F " : "";
-    exec(`taskkill ${flag}/PID ${pid}`, () => {});
+    exec(`taskkill ${flag}/PID ${pid}`, () => { });
   } else {
     process.kill(pid, force ? "SIGKILL" : "SIGTERM");
   }
@@ -83,30 +84,30 @@ async function startMitm(apiKey, sudoPassword) {
   if (serverProcess && !serverProcess.killed) {
     throw new Error("MITM proxy is already running");
   }
-  
+
   // 1. Generate SSL certificate if not exists
   const certPath = path.join(os.homedir(), ".9router", "mitm", "server.crt");
   if (!fs.existsSync(certPath)) {
     console.log("Generating SSL certificate...");
     await generateCert();
   }
-  
+
   // 2. Install certificate to system keychain
   await installCert(sudoPassword, certPath);
-  
+
   // 3. Add DNS entry
   console.log("Adding DNS entry...");
   await addDNSEntry(sudoPassword);
-  
+
   // 4. Start MITM server (port 443 requires elevated privileges)
   console.log("Starting MITM server...");
-  const serverPath = path.join(process.cwd(), "src/mitm/server.js");
+  const serverPath = path.join(process.cwd(), "src", "mitm", "server.js");
 
   if (IS_WIN) {
     // Windows: spawn via powershell elevated to bind port 443
     const nodePath = process.execPath;
     const envArgs = `$env:ROUTER_API_KEY='${apiKey}'; $env:NODE_ENV='production'; & '${nodePath}' '${serverPath}'`;
-    serverProcess = spawn("powershell", [
+    serverProcess = cp.spawn("powershell", [
       "-Command",
       `Start-Process powershell -ArgumentList '-NoProfile','-Command','${envArgs.replace(/'/g, "''")}' -Verb RunAs -PassThru`
     ], {
@@ -114,7 +115,8 @@ async function startMitm(apiKey, sudoPassword) {
       stdio: ["ignore", "pipe", "pipe"]
     });
   } else {
-    serverProcess = spawn("node", [serverPath], {
+    // Use process.execPath instead of 'node' to avoid Next.js static analysis tracing
+    serverProcess = cp.spawn(process.execPath, [serverPath], {
       env: {
         ...process.env,
         ROUTER_API_KEY: apiKey,
@@ -124,26 +126,26 @@ async function startMitm(apiKey, sudoPassword) {
       stdio: ["ignore", "pipe", "pipe"]
     });
   }
-  
+
   serverPid = serverProcess.pid;
-  
+
   // Save PID to file
   fs.writeFileSync(PID_FILE, String(serverPid));
-  
+
   // Log server output
   serverProcess.stdout.on("data", (data) => {
     console.log(`[MITM Server] ${data.toString().trim()}`);
   });
-  
+
   serverProcess.stderr.on("data", (data) => {
     console.error(`[MITM Server Error] ${data.toString().trim()}`);
   });
-  
+
   serverProcess.on("exit", (code) => {
     console.log(`MITM server exited with code ${code}`);
     serverProcess = null;
     serverPid = null;
-    
+
     // Remove PID file
     try {
       fs.unlinkSync(PID_FILE);
@@ -151,7 +153,7 @@ async function startMitm(apiKey, sudoPassword) {
       // Ignore
     }
   });
-  
+
   // Wait and verify server actually started
   const started = await new Promise((resolve) => {
     let resolved = false;
@@ -220,18 +222,18 @@ async function stopMitm(sudoPassword) {
     serverProcess = null;
     serverPid = null;
   }
-  
+
   // 2. Remove DNS entry
   console.log("Removing DNS entry...");
   await removeDNSEntry(sudoPassword);
-  
+
   // 3. Remove PID file
   try {
     fs.unlinkSync(PID_FILE);
   } catch (error) {
     // Ignore
   }
-  
+
   return {
     running: false,
     pid: null

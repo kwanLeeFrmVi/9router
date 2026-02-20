@@ -7,8 +7,6 @@ const nextConfig = {
   env: {
   },
   experimental: {
-    turbo: {
-    }
   },
   webpack: (config, { isServer }) => {
     // Stop watching logs directory to prevent HMR during streaming
