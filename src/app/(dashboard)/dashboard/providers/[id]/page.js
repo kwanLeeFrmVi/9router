@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import PropTypes from "prop-types";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
@@ -26,6 +26,12 @@ export default function ProviderDetailPage() {
   const [showBulkProxyModal, setShowBulkProxyModal] = useState(false);
   const [selectedConnection, setSelectedConnection] = useState(null);
   const [modelAliases, setModelAliases] = useState({});
+  const [remoteModels, setRemoteModels] = useState([]);
+  const [loadingRemoteModels, setLoadingRemoteModels] = useState(false);
+  const [selectedModelIds, setSelectedModelIds] = useState([]);
+  const [savingSelectedModels, setSavingSelectedModels] = useState(false);
+  const [modelSearchQuery, setModelSearchQuery] = useState("");
+  const [showSelectedOnly, setShowSelectedOnly] = useState(false);
   const [headerImgError, setHeaderImgError] = useState(false);
   const [modelTestResults, setModelTestResults] = useState({});
   const [modelsTestError, setModelsTestError] = useState("");
@@ -40,27 +46,47 @@ export default function ProviderDetailPage() {
 
   const providerInfo = providerNode
     ? {
-        id: providerNode.id,
-        name: providerNode.name || (providerNode.type === "anthropic-compatible" ? "Anthropic Compatible" : "OpenAI Compatible"),
-        color: providerNode.type === "anthropic-compatible" ? "#D97757" : "#10A37F",
-        textIcon: providerNode.type === "anthropic-compatible" ? "AC" : "OC",
-        apiType: providerNode.apiType,
-        baseUrl: providerNode.baseUrl,
-        type: providerNode.type,
-      }
+      id: providerNode.id,
+      name: providerNode.name || (providerNode.type === "anthropic-compatible" ? "Anthropic Compatible" : "OpenAI Compatible"),
+      color: providerNode.type === "anthropic-compatible" ? "#D97757" : "#10A37F",
+      textIcon: providerNode.type === "anthropic-compatible" ? "AC" : "OC",
+      apiType: providerNode.apiType,
+      baseUrl: providerNode.baseUrl,
+      type: providerNode.type,
+    }
     : (OAUTH_PROVIDERS[providerId] || APIKEY_PROVIDERS[providerId] || FREE_PROVIDERS[providerId]);
   const isOAuth = !!OAUTH_PROVIDERS[providerId] || !!FREE_PROVIDERS[providerId];
   const models = getModelsByProviderId(providerId);
   const providerAlias = getProviderAlias(providerId);
-  
+
   const isOpenAICompatible = isOpenAICompatibleProvider(providerId);
   const isAnthropicCompatible = isAnthropicCompatibleProvider(providerId);
   const isCompatible = isOpenAICompatible || isAnthropicCompatible;
-  
+
   const providerStorageAlias = isCompatible ? providerId : providerAlias;
   const providerDisplayAlias = isCompatible
     ? (providerNode?.prefix || providerId)
     : providerAlias;
+  const activeConnection = connections.find((conn) => conn.isActive !== false) || null;
+  const allProviderModels = models.length > 0 ? models : remoteModels;
+  const allProviderModelIds = useMemo(
+    () => allProviderModels.map((model) => model.id),
+    [allProviderModels]
+  );
+  const allProviderModelIdsKey = useMemo(
+    () => allProviderModelIds.join("|"),
+    [allProviderModelIds]
+  );
+  const savedEnabledModels = useMemo(() => {
+    const enabled = activeConnection?.providerSpecificData?.enabledModels;
+    return Array.isArray(enabled)
+      ? enabled.filter((modelId) => allProviderModelIds.includes(modelId))
+      : [];
+  }, [activeConnection?.providerSpecificData?.enabledModels, allProviderModelIds]);
+  const savedEnabledModelsKey = useMemo(
+    () => savedEnabledModels.join("|"),
+    [savedEnabledModels]
+  );
 
   // Define callbacks BEFORE the useEffect that uses them
   const fetchAliases = useCallback(async () => {
@@ -184,10 +210,109 @@ export default function ProviderDetailPage() {
     saveProviderStrategy("round-robin", value);
   };
 
+  const handleToggleModelSelected = (modelId) => {
+    setSelectedModelIds((prev) => (
+      prev.includes(modelId)
+        ? prev.filter((id) => id !== modelId)
+        : [...prev, modelId]
+    ));
+  };
+
+  const handleSaveSelectedModels = async () => {
+    if (!activeConnection || savingSelectedModels) return;
+    setSavingSelectedModels(true);
+    try {
+      const res = await fetch(`/api/providers/${activeConnection.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          providerSpecificData: {
+            enabledModels: selectedModelIds,
+          },
+        }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        alert(data.error || "Failed to save selected models");
+        return;
+      }
+
+      await fetchConnections();
+    } catch (error) {
+      console.log("Error saving selected models:", error);
+      alert("Failed to save selected models");
+    } finally {
+      setSavingSelectedModels(false);
+    }
+  };
+
   useEffect(() => {
     fetchConnections();
     fetchAliases();
   }, [fetchConnections, fetchAliases]);
+
+  useEffect(() => {
+    if (isCompatible || providerInfo?.passthroughModels) {
+      setSelectedModelIds([]);
+      return;
+    }
+
+    setSelectedModelIds(savedEnabledModels);
+  }, [
+    isCompatible,
+    providerInfo?.passthroughModels,
+    activeConnection?.id,
+    savedEnabledModels,
+    allProviderModelIdsKey,
+    savedEnabledModelsKey
+  ]);
+
+  const fetchRemoteModels = useCallback(async () => {
+    if (isCompatible || providerInfo?.passthroughModels || models.length > 0) {
+      setRemoteModels([]);
+      return;
+    }
+
+    if (!activeConnection) {
+      setRemoteModels([]);
+      return;
+    }
+
+    setLoadingRemoteModels(true);
+    try {
+      const res = await fetch(`/api/providers/${activeConnection.id}/models`);
+      const data = await res.json();
+      if (!res.ok) {
+        setRemoteModels([]);
+        return;
+      }
+
+      const parsed = (data.models || [])
+        .map((item) => {
+          if (typeof item === "string") return { id: item, name: item };
+          const modelId = item?.id || item?.name || item?.model;
+          if (!modelId) return null;
+          return { id: modelId, name: item?.name || modelId };
+        })
+        .filter(Boolean);
+
+      const deduped = Array.from(
+        new Map(parsed.map((item) => [item.id, item])).values()
+      );
+
+      setRemoteModels(deduped);
+    } catch (error) {
+      console.log("Error fetching remote models:", error);
+      setRemoteModels([]);
+    } finally {
+      setLoadingRemoteModels(false);
+    }
+  }, [activeConnection, isCompatible, models.length, providerInfo?.passthroughModels]);
+
+  useEffect(() => {
+    fetchRemoteModels();
+  }, [fetchRemoteModels]);
 
   const handleSetAlias = async (modelId, alias, providerAliasOverride = providerAlias) => {
     const fullModel = `${providerAliasOverride}/${modelId}`;
@@ -553,6 +678,29 @@ export default function ProviderDetailPage() {
         />
       );
     }
+    const availableModels = allProviderModels;
+    if (availableModels.length === 0) {
+      if (loadingRemoteModels) {
+        return <p className="text-sm text-text-muted">Loading models from provider...</p>;
+      }
+      return <p className="text-sm text-text-muted">No models configured</p>;
+    }
+
+    const selectedSet = new Set(selectedModelIds);
+    const filteredBySelection = showSelectedOnly
+      ? availableModels.filter((model) => selectedSet.has(model.id))
+      : availableModels;
+    const query = modelSearchQuery.trim().toLowerCase();
+    const visibleModels = query
+      ? filteredBySelection.filter((model) =>
+        model.id.toLowerCase().includes(query) ||
+        (model.name || "").toLowerCase().includes(query)
+      )
+      : filteredBySelection;
+    const hasSelectionChanges =
+      savedEnabledModels.length !== selectedModelIds.length ||
+      savedEnabledModels.some((modelId) => !selectedSet.has(modelId));
+
     // Custom models added by user (stored as aliases: modelId → providerAlias/modelId)
     const customModels = Object.entries(modelAliases)
       .filter(([alias, fullModel]) => {
@@ -569,57 +717,120 @@ export default function ProviderDetailPage() {
       }));
 
     return (
-      <div className="flex flex-wrap gap-3">
-        {models.map((model) => {
-          const fullModel = `${providerStorageAlias}/${model.id}`;
-          const oldFormatModel = `${providerId}/${model.id}`;
-          const existingAlias = Object.entries(modelAliases).find(
-            ([, m]) => m === fullModel || m === oldFormatModel
-          )?.[0];
-          return (
-            <ModelRow
-              key={model.id}
-              model={model}
-              fullModel={`${providerDisplayAlias}/${model.id}`}
-              alias={existingAlias}
-              copied={copied}
-              onCopy={copy}
-              onSetAlias={(alias) => handleSetAlias(model.id, alias, providerStorageAlias)}
-              onDeleteAlias={() => handleDeleteAlias(existingAlias)}
-              testStatus={modelTestResults[model.id]}
-              onTest={connections.length > 0 ? () => handleTestModel(model.id) : undefined}
-              isTesting={testingModelId === model.id}
+      <div className="flex flex-col gap-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative flex-1 min-w-55">
+            <Input
+              value={modelSearchQuery}
+              onChange={(e) => setModelSearchQuery(e.target.value)}
+              placeholder="Search model id"
+              className="pr-8"
             />
-          );
-        })}
+            {modelSearchQuery && (
+              <button
+                type="button"
+                onClick={() => setModelSearchQuery("")}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-text-muted hover:text-primary"
+                title="Clear search"
+              >
+                <span className="material-symbols-outlined text-[16px]">close</span>
+              </button>
+            )}
+          </div>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => setSelectedModelIds(allProviderModelIds)}
+            disabled={allProviderModels.length === 0}
+          >
+            Select all
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => setSelectedModelIds([])}
+          >
+            Unselect all
+          </Button>
+          <Button
+            size="sm"
+            onClick={handleSaveSelectedModels}
+            disabled={!activeConnection || savingSelectedModels || !hasSelectionChanges}
+          >
+            {savingSelectedModels ? "Saving..." : "Save selection"}
+          </Button>
+          <div className="flex items-center gap-1 pl-2">
+            <span className="text-xs text-text-muted">Selected only</span>
+            <Toggle
+              size="sm"
+              checked={showSelectedOnly}
+              onChange={setShowSelectedOnly}
+              title="Show only selected models"
+            />
+          </div>
+        </div>
 
-        {/* Custom models inline */}
-        {customModels.map((model) => (
-          <ModelRow
-            key={model.id}
-            model={{ id: model.id }}
-            fullModel={`${providerDisplayAlias}/${model.id}`}
-            alias={model.alias}
-            copied={copied}
-            onCopy={copy}
-            onSetAlias={() => {}}
-            onDeleteAlias={() => handleDeleteAlias(model.alias)}
-            testStatus={modelTestResults[model.id]}
-            onTest={connections.length > 0 ? () => handleTestModel(model.id) : undefined}
-            isTesting={testingModelId === model.id}
-            isCustom
-          />
-        ))}
+        <p className="text-xs text-text-muted">
+          {selectedModelIds.length > 0
+            ? `${selectedModelIds.length} selected`
+            : "All models enabled"}
+        </p>
 
-        {/* Add model button — inline, same style as model chips */}
-        <button
-          onClick={() => setShowAddCustomModel(true)}
-          className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-dashed border-black/15 dark:border-white/15 text-xs text-text-muted hover:text-primary hover:border-primary/40 transition-colors"
-        >
-          <span className="material-symbols-outlined text-sm">add</span>
-          Add Model
-        </button>
-      </div>
+        {
+          visibleModels.length === 0 && customModels.length === 0 ? (
+            <p className="text-sm text-text-muted">No models match your filter.</p>
+          ) : (
+            <div className="flex flex-wrap gap-3">
+              {visibleModels.map((model) => {
+                const fullModel = `${providerStorageAlias}/${model.id}`;
+                const oldFormatModel = `${providerId}/${model.id}`;
+                const existingAlias = Object.entries(modelAliases).find(
+                  ([, m]) => m === fullModel || m === oldFormatModel
+                )?.[0];
+                return (
+                  <ModelRow
+                    key={model.id}
+                    model={model}
+                    fullModel={`${providerDisplayAlias}/${model.id}`}
+                    alias={existingAlias}
+                    copied={copied}
+                    onCopy={copy}
+                    selected={selectedSet.has(model.id)}
+                    onToggleSelect={() => handleToggleModelSelected(model.id)}
+                    onSetAlias={(alias) => handleSetAlias(model.id, alias, providerStorageAlias)}
+                    onDeleteAlias={() => handleDeleteAlias(existingAlias)}
+                    testStatus={modelTestResults[model.id]}
+                    onTest={connections.length > 0 ? () => handleTestModel(model.id) : undefined}
+                    isTesting={testingModelId === model.id}
+                  />
+                );
+              })}
+              {/* Custom models inline */}
+              {customModels.map((model) => (
+                <ModelRow
+                  key={model.id}
+                  model={{ id: model.id }}
+                  fullModel={`${providerDisplayAlias}/${model.id}`}
+                  alias={model.alias}
+                  copied={copied}
+                  onCopy={copy}
+                  onSetAlias={() => { }}
+                  onDeleteAlias={() => handleDeleteAlias(model.alias)}
+                  isCustom
+                />
+              ))}
+              {/* Add model button — inline, same style as model chips */}
+              <button
+                onClick={() => setShowAddCustomModel(true)}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-dashed border-black/15 dark:border-white/15 text-xs text-text-muted hover:text-primary hover:border-primary/40 transition-colors"
+              >
+                <span className="material-symbols-outlined text-sm">add</span>
+                Add Model
+              </button>
+            </div>
+          )
+        }
+      </div >
     );
   };
 
@@ -630,7 +841,7 @@ export default function ProviderDetailPage() {
         <CardSkeleton />
       </div>
     );
-}
+  }
 
   if (!providerInfo) {
     return (
@@ -754,27 +965,28 @@ export default function ProviderDetailPage() {
       <Card>
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold">Connections</h2>
-          {/* Round Robin toggle */}
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-text-muted font-medium">Round Robin</span>
-            <Toggle
-              checked={providerStrategy === "round-robin"}
-              onChange={handleRoundRobinToggle}
-            />
-            {providerStrategy === "round-robin" && (
-              <div className="flex items-center gap-1.5">
-                <span className="text-xs text-text-muted">Sticky:</span>
-                <input
-                  type="number"
-                  min={1}
-                  value={providerStickyLimit}
-                  onChange={(e) => handleStickyLimitChange(e.target.value)}
-                  placeholder="1"
-                  className="w-14 px-2 py-1 text-xs border border-border rounded-md bg-background focus:outline-none focus:border-primary"
-                />
-              </div>
-            )}
-          </div>
+          {!isCompatible && (
+            <div className="flex gap-2">
+              {providerId === "iflow" && (
+                <Button
+                  size="sm"
+                  icon="cookie"
+                  variant="secondary"
+                  onClick={() => setShowIFlowCookieModal(true)}
+                  title="Add connection using browser cookie"
+                >
+                  Cookie
+                </Button>
+              )}
+              <Button
+                size="sm"
+                icon="add"
+                onClick={() => isOAuth ? setShowOAuthModal(true) : setShowAddApiKeyModal(true)}
+              >
+                Add
+              </Button>
+            </div>
+          )}
         </div>
 
         {connections.length === 0 ? (
@@ -798,31 +1010,7 @@ export default function ProviderDetailPage() {
             )}
           </div>
         ) : (
-          <>
-            {connectionsList}
-            {!isCompatible && (
-              <div className="flex gap-2 mt-4">
-                {providerId === "iflow" && (
-                  <Button
-                    size="sm"
-                    icon="cookie"
-                    variant="secondary"
-                    onClick={() => setShowIFlowCookieModal(true)}
-                    title="Add connection using browser cookie"
-                  >
-                    Cookie
-                  </Button>
-                )}
-                <Button
-                  size="sm"
-                  icon="add"
-                  onClick={() => isOAuth ? setShowOAuthModal(true) : setShowAddApiKeyModal(true)}
-                >
-                  Add
-                </Button>
-              </div>
-            )}
-          </>
+          { connectionsList }
         )}
       </Card>
 
@@ -913,60 +1101,71 @@ export default function ProviderDetailPage() {
   );
 }
 
-function ModelRow({ model, fullModel, alias, copied, onCopy, testStatus, isCustom, onDeleteAlias, onTest, isTesting }) {
+function ModelRow({ model, fullModel, alias, selected, onToggleSelect, copied, onCopy, testStatus, isCustom, onDeleteAlias, onTest, isTesting }) {
   const borderColor = testStatus === "ok"
     ? "border-green-500/40"
     : testStatus === "error"
-    ? "border-red-500/40"
-    : "border-border";
+      ? "border-red-500/40"
+      : "border-border";
 
   const iconColor = testStatus === "ok"
     ? "#22c55e"
     : testStatus === "error"
-    ? "#ef4444"
-    : undefined;
+      ? "#ef4444"
+      : undefined;
 
   return (
-    <div className={`group px-3 py-2 rounded-lg border ${borderColor} hover:bg-sidebar/50`}>
-      <div className="flex items-center gap-2">
-        <span
-          className="material-symbols-outlined text-base"
-          style={iconColor ? { color: iconColor } : undefined}
-        >
-          {testStatus === "ok" ? "check_circle" : testStatus === "error" ? "cancel" : "smart_toy"}
-        </span>
-        <code className="text-xs text-text-muted font-mono bg-sidebar px-1.5 py-0.5 rounded">{fullModel}</code>
-        {onTest && (
-          <button
-            onClick={onTest}
-            disabled={isTesting}
-            className={`p-0.5 hover:bg-sidebar rounded text-text-muted hover:text-primary transition-opacity ${isTesting ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
-            title="Test model"
-          >
-            <span className="material-symbols-outlined text-sm" style={isTesting ? { animation: "spin 1s linear infinite" } : undefined}>
-              {isTesting ? "progress_activity" : "science"}
-            </span>
-          </button>
-        )}
+    <div className={`group flex items-center gap-2 px-3 py-2 rounded-lg border ${borderColor} hover:bg-sidebar/50`}>
+      {onToggleSelect && (
         <button
-          onClick={() => onCopy(fullModel, `model-${model.id}`)}
-          className="p-0.5 hover:bg-sidebar rounded text-text-muted hover:text-primary"
-          title="Copy model"
+          type="button"
+          onClick={onToggleSelect}
+          className={`p-0.5 rounded ${selected ? "text-primary" : "text-text-muted hover:text-primary"}`}
+          title={selected ? "Deselect model" : "Select model"}
         >
-          <span className="material-symbols-outlined text-sm">
-            {copied === `model-${model.id}` ? "check" : "content_copy"}
+          <span className="material-symbols-outlined text-[18px]">
+            {selected ? "check_box" : "check_box_outline_blank"}
           </span>
         </button>
-        {isCustom && (
-          <button
-            onClick={onDeleteAlias}
-            className="p-0.5 hover:bg-red-500/10 rounded text-text-muted hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity ml-auto"
-            title="Remove custom model"
-          >
-            <span className="material-symbols-outlined text-sm">close</span>
-          </button>
-        )}
-      </div>
+      )}
+      <span
+        className="material-symbols-outlined text-base text-text-muted cursor-default"
+        style={iconColor ? { color: iconColor } : undefined}
+        title={testStatus === "ok" ? "Test successful" : testStatus === "error" ? "Test failed" : "Model"}
+      >
+        {testStatus === "ok" ? "check_circle" : testStatus === "error" ? "cancel" : "smart_toy"}
+      </span>
+      <code className="text-xs text-text-muted font-mono bg-sidebar px-1.5 py-0.5 rounded">{fullModel}</code>
+      {onTest && (
+        <button
+          onClick={onTest}
+          disabled={isTesting}
+          className={`p-0.5 hover:bg-sidebar rounded text-text-muted hover:text-primary transition-opacity ${isTesting ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
+          title="Test model"
+        >
+          <span className="material-symbols-outlined text-sm" style={isTesting ? { animation: "spin 1s linear infinite" } : undefined}>
+            {isTesting ? "progress_activity" : "science"}
+          </span>
+        </button>
+      )}
+      <button
+        onClick={() => onCopy(fullModel, `model-${model.id}`)}
+        className="p-0.5 hover:bg-sidebar rounded text-text-muted hover:text-primary"
+        title="Copy model"
+      >
+        <span className="material-symbols-outlined text-sm">
+          {copied === `model-${model.id}` ? "check" : "content_copy"}
+        </span>
+      </button>
+      {isCustom && (
+        <button
+          onClick={onDeleteAlias}
+          className="p-0.5 hover:bg-red-500/10 rounded text-text-muted hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity ml-auto"
+          title="Remove custom model"
+        >
+          <span className="material-symbols-outlined text-sm">close</span>
+        </button>
+      )}
     </div>
   );
 }
@@ -977,6 +1176,8 @@ ModelRow.propTypes = {
   }).isRequired,
   fullModel: PropTypes.string.isRequired,
   alias: PropTypes.string,
+  selected: PropTypes.bool,
+  onToggleSelect: PropTypes.func,
   copied: PropTypes.string,
   onCopy: PropTypes.func.isRequired,
   testStatus: PropTypes.oneOf(["ok", "error"]),
@@ -1011,13 +1212,13 @@ function PassthroughModelsSection({ providerAlias, modelAliases, copied, onCopy,
     if (!newModel.trim() || adding) return;
     const modelId = newModel.trim();
     const defaultAlias = generateDefaultAlias(modelId);
-    
+
     // Check if alias already exists
     if (modelAliases[defaultAlias]) {
       alert(`Alias "${defaultAlias}" already exists. Please use a different model or edit existing alias.`);
       return;
     }
-    
+
     setAdding(true);
     try {
       await onSetAlias(modelId, defaultAlias);
@@ -1086,14 +1287,14 @@ function PassthroughModelRow({ modelId, fullModel, copied, onCopy, onDeleteAlias
   const borderColor = testStatus === "ok"
     ? "border-green-500/40"
     : testStatus === "error"
-    ? "border-red-500/40"
-    : "border-border";
+      ? "border-red-500/40"
+      : "border-border";
 
   const iconColor = testStatus === "ok"
     ? "#22c55e"
     : testStatus === "error"
-    ? "#ef4444"
-    : undefined;
+      ? "#ef4444"
+      : undefined;
 
   return (
     <div className={`flex items-center gap-3 p-3 rounded-lg border ${borderColor} hover:bg-sidebar/50`}>
@@ -1723,7 +1924,7 @@ function AddApiKeyModal({ isOpen, provider, providerName, isCompatible, isAnthro
         )}
         {isCompatible && (
           <p className="text-xs text-text-muted">
-            {isAnthropic 
+            {isAnthropic
               ? `Validation checks ${providerName || "Anthropic Compatible"} by verifying the API key.`
               : `Validation checks ${providerName || "OpenAI Compatible"} via /models on your base URL.`
             }
@@ -1890,12 +2091,12 @@ function EditConnectionModal({ isOpen, connection, proxyPools, onSave, onClose }
   return (
     <Modal isOpen={isOpen} title="Edit Connection" onClose={onClose}>
       <div className="flex flex-col gap-4">
-          <Input
-            label="Name"
-            value={formData.name}
-            onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+        <Input
+          label="Name"
+          value={formData.name}
+          onChange={(e) => setFormData({ ...formData, name: e.target.value })}
           placeholder={isOAuth ? "Account name" : "Production Key"}
-          />
+        />
         {isOAuth && connection.email && (
           <div className="bg-sidebar/50 p-3 rounded-lg">
             <p className="text-sm text-text-muted mb-1">Email</p>
@@ -2029,10 +2230,10 @@ function EditCompatibleNodeModal({ isOpen, node, onSave, onClose, isAnthropic })
       const res = await fetch("/api/provider-nodes/validate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          baseUrl: formData.baseUrl, 
-          apiKey: checkKey, 
-          type: isAnthropic ? "anthropic-compatible" : "openai-compatible" 
+        body: JSON.stringify({
+          baseUrl: formData.baseUrl,
+          apiKey: checkKey,
+          type: isAnthropic ? "anthropic-compatible" : "openai-compatible"
         }),
       });
       const data = await res.json();
