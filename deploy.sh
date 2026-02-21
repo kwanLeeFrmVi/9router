@@ -9,7 +9,7 @@ echo "🔨 Building..."
 bun run build
 
 echo "📦 Compressing .next/..."
-tar -czf .next.tar.gz .next/
+COPYFILE_DISABLE=1 tar -czf .next.tar.gz .next/
 
 echo "🚀 Deploying to remote..."
 scp -i $SSH_KEY .next.tar.gz $REMOTE_HOST:/tmp/
