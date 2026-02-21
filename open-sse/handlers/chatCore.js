@@ -427,11 +427,12 @@ export async function handleChatCore({
   connectionId,
   userAgent,
   apiKey,
+  forceSourceFormat,
 }) {
   const { provider, model } = modelInfo;
   const requestStartTime = Date.now();
 
-  const sourceFormat = detectFormat(body);
+  const sourceFormat = forceSourceFormat || detectFormat(body);
 
   // Check for bypass patterns (warmup, skip) - return fake response
   const bypassResponse = handleBypassRequest(body, model, userAgent);
