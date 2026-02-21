@@ -2,6 +2,20 @@ import { NextResponse } from "next/server";
 import { getProviderConnectionById } from "@/models";
 import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider } from "@/shared/constants/providers";
 
+const parseOpenAIStyleModels = (data) => {
+  if (Array.isArray(data)) return data;
+  return data?.data || data?.models || data?.results || [];
+};
+
+const createOpenAIModelsConfig = (url) => ({
+  url,
+  method: "GET",
+  headers: { "Content-Type": "application/json" },
+  authHeader: "Authorization",
+  authPrefix: "Bearer ",
+  parseResponse: parseOpenAIStyleModels
+});
+
 // Provider models endpoints configuration
 const PROVIDER_MODELS_CONFIG = {
   claude: {
@@ -46,22 +60,8 @@ const PROVIDER_MODELS_CONFIG = {
     body: {},
     parseResponse: (data) => data.models || []
   },
-  openai: {
-    url: "https://api.openai.com/v1/models",
-    method: "GET",
-    headers: { "Content-Type": "application/json" },
-    authHeader: "Authorization",
-    authPrefix: "Bearer ",
-    parseResponse: (data) => data.data || []
-  },
-  openrouter: {
-    url: "https://openrouter.ai/api/v1/models",
-    method: "GET",
-    headers: { "Content-Type": "application/json" },
-    authHeader: "Authorization",
-    authPrefix: "Bearer ",
-    parseResponse: (data) => data.data || []
-  },
+  openai: createOpenAIModelsConfig("https://api.openai.com/v1/models"),
+  openrouter: createOpenAIModelsConfig("https://openrouter.ai/api/v1/models"),
   anthropic: {
     url: "https://api.anthropic.com/v1/models",
     method: "GET",
@@ -71,7 +71,25 @@ const PROVIDER_MODELS_CONFIG = {
     },
     authHeader: "x-api-key",
     parseResponse: (data) => data.data || []
-  }
+  },
+
+  // OpenAI-compatible API key providers
+  deepseek: createOpenAIModelsConfig("https://api.deepseek.com/models"),
+  groq: createOpenAIModelsConfig("https://api.groq.com/openai/v1/models"),
+  xai: createOpenAIModelsConfig("https://api.x.ai/v1/models"),
+  mistral: createOpenAIModelsConfig("https://api.mistral.ai/v1/models"),
+  perplexity: createOpenAIModelsConfig("https://api.perplexity.ai/models"),
+  together: createOpenAIModelsConfig("https://api.together.xyz/v1/models"),
+  fireworks: createOpenAIModelsConfig("https://api.fireworks.ai/inference/v1/models"),
+  cerebras: createOpenAIModelsConfig("https://api.cerebras.ai/v1/models"),
+  cohere: createOpenAIModelsConfig("https://api.cohere.ai/v1/models"),
+  nebius: createOpenAIModelsConfig("https://api.studio.nebius.ai/v1/models"),
+  siliconflow: createOpenAIModelsConfig("https://api.siliconflow.cn/v1/models"),
+  hyperbolic: createOpenAIModelsConfig("https://api.hyperbolic.xyz/v1/models"),
+  nanobanana: createOpenAIModelsConfig("https://api.nanobananaapi.ai/v1/models"),
+  chutes: createOpenAIModelsConfig("https://llm.chutes.ai/v1/models"),
+  nvidia: createOpenAIModelsConfig("https://integrate.api.nvidia.com/v1/models"),
+  assemblyai: createOpenAIModelsConfig("https://api.assemblyai.com/v1/models")
 };
 
 /**
@@ -124,12 +142,12 @@ export async function GET(request, { params }) {
       if (!baseUrl) {
         return NextResponse.json({ error: "No base URL configured for Anthropic compatible provider" }, { status: 400 });
       }
-      
+
       baseUrl = baseUrl.replace(/\/$/, "");
       if (baseUrl.endsWith("/messages")) {
         baseUrl = baseUrl.slice(0, -9);
       }
-      
+
       const url = `${baseUrl}/models`;
       const response = await fetch(url, {
         method: "GET",
