@@ -37,258 +37,193 @@ import { getExecutor } from "../executors/index.js";
 import { convertResponsesStreamToJson } from "../transformer/streamToJsonConverter.js";
 
 /**
- * Detect actual non-streaming response format from body structure.
- * Used when the upstream returns a different format than the configured targetFormat.
- */
-function detectNonStreamingFormat(responseBody) {
-  if (!responseBody || typeof responseBody !== "object") return null;
-
-  // OpenAI format: has "choices" array
-  if (responseBody.choices !== undefined) {
-    return FORMATS.OPENAI;
-  }
-
-  // Claude format: has "content" array with typed blocks, or "type" === "message"
-  if (responseBody.type === "message" || (responseBody.content && responseBody.stop_reason !== undefined)) {
-    return FORMATS.CLAUDE;
-  }
-
-  // Gemini format: has "candidates" array
-  if (responseBody.candidates !== undefined) {
-    return FORMATS.GEMINI;
-  }
-
-  return null;
-}
-
-/**
- * Translate non-streaming response to the client's expected format.
- * Converts from the *actual* upstream format (targetFormat) → sourceFormat,
- * going through OpenAI as the intermediate hub when needed.
- *
- * Pipeline: upstream(targetFormat) → OpenAI → client(sourceFormat)
+ * Translate non-streaming response to OpenAI format
+ * Handles different provider response formats (Gemini, Claude, etc.)
  */
 function translateNonStreamingResponse(
   responseBody,
   targetFormat,
   sourceFormat,
 ) {
-  // If already in source format, return as-is
-  if (targetFormat === sourceFormat) {
+  // If already in source format (usually OpenAI), return as-is
+  if (targetFormat === sourceFormat || targetFormat === FORMATS.OPENAI) {
     return responseBody;
   }
 
-  // ── Step 1: upstream → OpenAI ──────────────────────────────────────
-  let openaiBody = responseBody;
-
-  if (targetFormat === FORMATS.OPENAI) {
-    // Already OpenAI – nothing to do
-    openaiBody = responseBody;
-  } else if (
+  // Handle Gemini/Antigravity format
+  if (
     targetFormat === FORMATS.GEMINI ||
     targetFormat === FORMATS.ANTIGRAVITY ||
     targetFormat === FORMATS.GEMINI_CLI
   ) {
-    openaiBody = convertGeminiToOpenAI(responseBody);
-  } else if (targetFormat === FORMATS.CLAUDE) {
-    openaiBody = convertClaudeToOpenAI(responseBody);
-  } else {
-    // Unknown upstream format – pass through and hope for the best
-    openaiBody = responseBody;
-  }
+    const response = responseBody.response || responseBody;
+    if (!response?.candidates?.[0]) {
+      return responseBody; // Can't translate, return raw
+    }
 
-  // ── Step 2: OpenAI → client ────────────────────────────────────────
-  if (sourceFormat === FORMATS.OPENAI || sourceFormat === targetFormat) {
-    return openaiBody;
-  }
+    const candidate = response.candidates[0];
+    const content = candidate.content;
+    const usage = response.usageMetadata || responseBody.usageMetadata;
 
-  if (sourceFormat === FORMATS.CLAUDE) {
-    return convertOpenAIToClaude(openaiBody);
-  }
+    // Build message content
+    let textContent = "";
+    const toolCalls = [];
+    let reasoningContent = "";
 
-  // Other client formats – return OpenAI body (most clients accept it)
-  return openaiBody;
-}
-
-// ── Helpers for non-streaming format conversion ─────────────────────
-
-/**
- * Gemini/Antigravity JSON → OpenAI chat.completion JSON
- */
-function convertGeminiToOpenAI(responseBody) {
-  const response = responseBody.response || responseBody;
-  if (!response?.candidates?.[0]) {
-    return responseBody;
-  }
-
-  const candidate = response.candidates[0];
-  const content = candidate.content;
-  const usage = response.usageMetadata || responseBody.usageMetadata;
-
-  let textContent = "";
-  const toolCalls = [];
-  let reasoningContent = "";
-
-  if (content?.parts) {
-    for (const part of content.parts) {
-      if (part.thought === true && part.text) {
-        reasoningContent += part.text;
-      } else if (part.text !== undefined) {
-        textContent += part.text;
+    if (content?.parts) {
+      for (const part of content.parts) {
+        // Handle thinking/reasoning
+        if (part.thought === true && part.text) {
+          reasoningContent += part.text;
+        }
+        // Regular text
+        else if (part.text !== undefined) {
+          textContent += part.text;
+        }
+        // Function calls
+        if (part.functionCall) {
+          toolCalls.push({
+            id: `call_${part.functionCall.name}_${Date.now()}_${toolCalls.length}`,
+            type: "function",
+            function: {
+              name: part.functionCall.name,
+              arguments: JSON.stringify(part.functionCall.args || {}),
+            },
+          });
+        }
       }
-      if (part.functionCall) {
+    }
+
+    // Build OpenAI format message
+    const message = { role: "assistant" };
+    if (textContent) {
+      message.content = textContent;
+    }
+    if (reasoningContent) {
+      message.reasoning_content = reasoningContent;
+    }
+    if (toolCalls.length > 0) {
+      message.tool_calls = toolCalls;
+    }
+    // If no content at all, set content to empty string
+    if (!message.content && !message.tool_calls) {
+      message.content = "";
+    }
+
+    // Determine finish reason
+    let finishReason = (candidate.finishReason || "stop").toLowerCase();
+    if (finishReason === "stop" && toolCalls.length > 0) {
+      finishReason = "tool_calls";
+    }
+
+    const result = {
+      id: `chatcmpl-${response.responseId || Date.now()}`,
+      object: "chat.completion",
+      created: Math.floor(
+        new Date(response.createTime || Date.now()).getTime() / 1000,
+      ),
+      model: response.modelVersion || "gemini",
+      choices: [
+        {
+          index: 0,
+          message,
+          finish_reason: finishReason,
+        },
+      ],
+    };
+
+    // Add usage if available (match streaming translator: add thoughtsTokenCount to prompt_tokens)
+    if (usage) {
+      result.usage = {
+        prompt_tokens:
+          (usage.promptTokenCount || 0) + (usage.thoughtsTokenCount || 0),
+        completion_tokens: usage.candidatesTokenCount || 0,
+        total_tokens: usage.totalTokenCount || 0,
+      };
+      if (usage.thoughtsTokenCount > 0) {
+        result.usage.completion_tokens_details = {
+          reasoning_tokens: usage.thoughtsTokenCount,
+        };
+      }
+    }
+
+    return result;
+  }
+
+  // Handle Claude format
+  if (targetFormat === FORMATS.CLAUDE) {
+    if (!responseBody.content) {
+      return responseBody; // Can't translate, return raw
+    }
+
+    let textContent = "";
+    let thinkingContent = "";
+    const toolCalls = [];
+
+    for (const block of responseBody.content) {
+      if (block.type === "text") {
+        textContent += block.text;
+      } else if (block.type === "thinking") {
+        thinkingContent += block.thinking || "";
+      } else if (block.type === "tool_use") {
         toolCalls.push({
-          id: `call_${part.functionCall.name}_${Date.now()}_${toolCalls.length}`,
+          id: block.id,
           type: "function",
           function: {
-            name: part.functionCall.name,
-            arguments: JSON.stringify(part.functionCall.args || {}),
+            name: block.name,
+            arguments: JSON.stringify(block.input || {}),
           },
         });
       }
     }
-  }
 
-  const message = { role: "assistant" };
-  if (textContent) message.content = textContent;
-  if (reasoningContent) message.reasoning_content = reasoningContent;
-  if (toolCalls.length > 0) message.tool_calls = toolCalls;
-  if (!message.content && !message.tool_calls) message.content = "";
+    const message = { role: "assistant" };
+    if (textContent) {
+      message.content = textContent;
+    }
+    if (thinkingContent) {
+      message.reasoning_content = thinkingContent;
+    }
+    if (toolCalls.length > 0) {
+      message.tool_calls = toolCalls;
+    }
+    if (!message.content && !message.tool_calls) {
+      message.content = "";
+    }
 
-  let finishReason = (candidate.finishReason || "stop").toLowerCase();
-  if (finishReason === "stop" && toolCalls.length > 0) finishReason = "tool_calls";
+    let finishReason = responseBody.stop_reason || "stop";
+    if (finishReason === "end_turn") finishReason = "stop";
+    if (finishReason === "tool_use") finishReason = "tool_calls";
 
-  const result = {
-    id: `chatcmpl-${response.responseId || Date.now()}`,
-    object: "chat.completion",
-    created: Math.floor(new Date(response.createTime || Date.now()).getTime() / 1000),
-    model: response.modelVersion || "gemini",
-    choices: [{ index: 0, message, finish_reason: finishReason }],
-  };
-
-  if (usage) {
-    result.usage = {
-      prompt_tokens: (usage.promptTokenCount || 0) + (usage.thoughtsTokenCount || 0),
-      completion_tokens: usage.candidatesTokenCount || 0,
-      total_tokens: usage.totalTokenCount || 0,
+    const result = {
+      id: `chatcmpl-${responseBody.id || Date.now()}`,
+      object: "chat.completion",
+      created: Math.floor(Date.now() / 1000),
+      model: responseBody.model || "claude",
+      choices: [
+        {
+          index: 0,
+          message,
+          finish_reason: finishReason,
+        },
+      ],
     };
-    if (usage.thoughtsTokenCount > 0) {
-      result.usage.completion_tokens_details = { reasoning_tokens: usage.thoughtsTokenCount };
+
+    if (responseBody.usage) {
+      result.usage = {
+        prompt_tokens: responseBody.usage.input_tokens || 0,
+        completion_tokens: responseBody.usage.output_tokens || 0,
+        total_tokens:
+          (responseBody.usage.input_tokens || 0) +
+          (responseBody.usage.output_tokens || 0),
+      };
     }
+
+    return result;
   }
 
-  return result;
-}
-
-/**
- * Claude JSON → OpenAI chat.completion JSON
- */
-function convertClaudeToOpenAI(responseBody) {
-  if (!responseBody.content) return responseBody;
-
-  let textContent = "";
-  let thinkingContent = "";
-  const toolCalls = [];
-
-  for (const block of responseBody.content) {
-    if (block.type === "text") textContent += block.text;
-    else if (block.type === "thinking") thinkingContent += block.thinking || "";
-    else if (block.type === "tool_use") {
-      toolCalls.push({
-        id: block.id,
-        type: "function",
-        function: { name: block.name, arguments: JSON.stringify(block.input || {}) },
-      });
-    }
-  }
-
-  const message = { role: "assistant" };
-  if (textContent) message.content = textContent;
-  if (thinkingContent) message.reasoning_content = thinkingContent;
-  if (toolCalls.length > 0) message.tool_calls = toolCalls;
-  if (!message.content && !message.tool_calls) message.content = "";
-
-  let finishReason = responseBody.stop_reason || "stop";
-  if (finishReason === "end_turn") finishReason = "stop";
-  if (finishReason === "tool_use") finishReason = "tool_calls";
-
-  const result = {
-    id: `chatcmpl-${responseBody.id || Date.now()}`,
-    object: "chat.completion",
-    created: Math.floor(Date.now() / 1000),
-    model: responseBody.model || "claude",
-    choices: [{ index: 0, message, finish_reason: finishReason }],
-  };
-
-  if (responseBody.usage) {
-    result.usage = {
-      prompt_tokens: responseBody.usage.input_tokens || 0,
-      completion_tokens: responseBody.usage.output_tokens || 0,
-      total_tokens: (responseBody.usage.input_tokens || 0) + (responseBody.usage.output_tokens || 0),
-    };
-  }
-
-  return result;
-}
-
-/**
- * OpenAI chat.completion JSON → Claude /v1/messages JSON
- */
-function convertOpenAIToClaude(openaiBody) {
-  if (!openaiBody?.choices?.[0]?.message) return openaiBody;
-
-  const msg = openaiBody.choices[0].message;
-  const contentBlocks = [];
-
-  // Thinking / reasoning
-  if (msg.reasoning_content) {
-    contentBlocks.push({ type: "thinking", thinking: msg.reasoning_content });
-  }
-
-  // Text content
-  if (msg.content) {
-    contentBlocks.push({ type: "text", text: msg.content });
-  }
-
-  // Tool calls
-  if (msg.tool_calls) {
-    for (const tc of msg.tool_calls) {
-      let input = {};
-      try { input = JSON.parse(tc.function?.arguments || "{}"); } catch { }
-      contentBlocks.push({
-        type: "tool_use",
-        id: tc.id || `toolu_${Date.now()}`,
-        name: tc.function?.name || "",
-        input,
-      });
-    }
-  }
-
-  if (contentBlocks.length === 0) {
-    contentBlocks.push({ type: "text", text: "" });
-  }
-
-  // Map finish_reason → stop_reason
-  let stopReason = "end_turn";
-  const fr = openaiBody.choices[0].finish_reason;
-  if (fr === "length") stopReason = "max_tokens";
-  else if (fr === "tool_calls") stopReason = "tool_use";
-
-  const claudeResponse = {
-    id: (openaiBody.id || `msg_${Date.now()}`).replace(/^chatcmpl-/, "msg_"),
-    type: "message",
-    role: "assistant",
-    model: openaiBody.model || "unknown",
-    content: contentBlocks,
-    stop_reason: stopReason,
-    stop_sequence: null,
-    usage: {
-      input_tokens: openaiBody.usage?.prompt_tokens || 0,
-      output_tokens: openaiBody.usage?.completion_tokens || 0,
-    },
-  };
-
-  return claudeResponse;
+  // Unknown format, return as-is
+  return responseBody;
 }
 
 /**
@@ -315,17 +250,13 @@ function extractUsageFromResponse(responseBody, provider) {
   }
 
   // OpenAI format
-  if (
-    responseBody.usage &&
-    typeof responseBody.usage === "object" &&
-    (responseBody.usage.prompt_tokens !== undefined ||
-      responseBody.usage.completion_tokens !== undefined)
-  ) {
+  if (responseBody.usage && typeof responseBody.usage === "object") {
     return {
       prompt_tokens: responseBody.usage.prompt_tokens || 0,
       completion_tokens: responseBody.usage.completion_tokens || 0,
       cached_tokens: responseBody.usage.prompt_tokens_details?.cached_tokens,
-      reasoning_tokens: responseBody.usage.completion_tokens_details?.reasoning_tokens
+      reasoning_tokens:
+        responseBody.usage.completion_tokens_details?.reasoning_tokens,
     };
   }
 
@@ -483,7 +414,6 @@ function parseSSEToOpenAIResponse(rawSSE, fallbackModel) {
  * @param {function} options.onDisconnect - Callback when client disconnects
  * @param {string} options.connectionId - Connection ID for usage tracking
  * @param {string} options.apiKey - API key for usage tracking
- * @param {string} options.forceSourceFormat - Override auto-detected source format (e.g. "claude" for /v1/messages)
  */
 export async function handleChatCore({
   body,
@@ -497,12 +427,11 @@ export async function handleChatCore({
   connectionId,
   userAgent,
   apiKey,
-  forceSourceFormat,
 }) {
   const { provider, model } = modelInfo;
   const requestStartTime = Date.now();
 
-  const sourceFormat = forceSourceFormat || detectFormat(body);
+  const sourceFormat = detectFormat(body);
 
   // Check for bypass patterns (warmup, skip) - return fake response
   const bypassResponse = handleBypassRequest(body, model, userAgent);
@@ -847,7 +776,7 @@ export async function handleChatCore({
               finish_reason: jsonResponse.status || "unknown",
             },
             status: "success",
-            endpoint: clientRawRequest?.endpoint || null
+            endpoint: clientRawRequest?.endpoint || null,
           }).catch(() => { });
 
           // If client sent a Chat Completions request (not Responses API),
@@ -884,11 +813,6 @@ export async function handleChatCore({
                 }
                 : undefined,
             };
-
-            // Translate further to Claude format if client expects it
-            if (sourceFormat === FORMATS.CLAUDE) {
-              finalResponse = convertOpenAIToClaude(finalResponse);
-            }
           }
 
           return {
@@ -935,7 +859,7 @@ export async function handleChatCore({
                 timestamp: new Date().toISOString(),
                 connectionId: connectionId || undefined,
                 apiKey: apiKey || undefined,
-                endpoint: clientRawRequest?.endpoint || null
+                endpoint: clientRawRequest?.endpoint || null,
               }).catch(() => { });
             }
 
@@ -957,7 +881,7 @@ export async function handleChatCore({
                 finish_reason: parsed.choices?.[0]?.finish_reason || "unknown",
               },
               status: "success",
-              endpoint: clientRawRequest?.endpoint || null
+              endpoint: clientRawRequest?.endpoint || null,
             }).catch(() => { });
 
             return {
@@ -1065,22 +989,16 @@ export async function handleChatCore({
         timestamp: new Date().toISOString(),
         connectionId: connectionId || undefined,
         apiKey: apiKey || undefined,
-        endpoint: clientRawRequest?.endpoint || null
+        endpoint: clientRawRequest?.endpoint || null,
       }).catch((err) => {
         console.error("Failed to save usage stats:", err.message);
       });
     }
 
-    // Translate response to client's expected format
-    // Detect actual upstream format – may differ from configured targetFormat
-    // (e.g. anthropic-compatible endpoint returning OpenAI JSON, or vice-versa)
-    const actualFormat = detectNonStreamingFormat(responseBody) || targetFormat;
-    const effectiveTarget = (actualFormat !== targetFormat) ? actualFormat : targetFormat;
-    console.log(`[DEBUG] Non-streaming translation: sourceFormat=${sourceFormat}, targetFormat=${targetFormat}, actualFormat=${actualFormat}, effectiveTarget=${effectiveTarget}`);
-    const translatedResponse = needsTranslation(effectiveTarget, sourceFormat)
-      ? translateNonStreamingResponse(responseBody, effectiveTarget, sourceFormat)
+    // Translate response to client's expected format (usually OpenAI)
+    const translatedResponse = needsTranslation(targetFormat, sourceFormat)
+      ? translateNonStreamingResponse(responseBody, targetFormat, sourceFormat)
       : responseBody;
-    console.log(`[DEBUG] Translated response type:`, translatedResponse?.type, 'id:', translatedResponse?.id?.substring(0, 20));
 
     // Ensure OpenAI-required fields are present (needed for Letta and other strict clients)
     if (!translatedResponse.object) translatedResponse.object = "chat.completion";
@@ -1134,7 +1052,7 @@ export async function handleChatCore({
           translatedResponse?.choices?.[0]?.finish_reason || "unknown",
       },
       status: "success",
-      endpoint: clientRawRequest?.endpoint || null
+      endpoint: clientRawRequest?.endpoint || null,
     };
 
     // Async save (don't block response)
@@ -1207,11 +1125,7 @@ export async function handleChatCore({
     });
 
     // Save usage stats for dashboard (skip if no real token data to avoid duplicates)
-    if (
-      usage &&
-      typeof usage === "object" &&
-      (usage.prompt_tokens > 0 || usage.completion_tokens > 0)
-    ) {
+    if (usage && typeof usage === "object" && (usage.prompt_tokens > 0 || usage.completion_tokens > 0)) {
       const msg = `[${new Date().toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit" })}] 📊 [STREAM USAGE] ${provider.toUpperCase()} | in=${usage?.prompt_tokens || 0} | out=${usage?.completion_tokens || 0}${connectionId ? ` | account=${connectionId.slice(0, 8)}...` : ""}`;
       console.log(`${COLORS.green}${msg}${COLORS.reset}`);
 
@@ -1222,7 +1136,7 @@ export async function handleChatCore({
         timestamp: new Date().toISOString(),
         connectionId: connectionId || undefined,
         apiKey: apiKey || undefined,
-        endpoint: clientRawRequest?.endpoint || null
+        endpoint: clientRawRequest?.endpoint || null,
       }).catch((err) => {
         console.error("Failed to save streaming usage stats:", err.message);
       });
@@ -1239,12 +1153,8 @@ export async function handleChatCore({
   if (needsCodexTranslation) {
     // For claude clients, translate directly to claude format
     // For openai/openai-responses clients, translate to openai (responsesHandler will re-add event: lines)
-    const codexTarget =
-      sourceFormat === FORMATS.CLAUDE ? FORMATS.CLAUDE : FORMATS.OPENAI;
-    log?.debug?.(
-      "STREAM",
-      `Codex translation mode: openai-responses → ${codexTarget}`,
-    );
+    const codexTarget = sourceFormat === FORMATS.CLAUDE ? FORMATS.CLAUDE : FORMATS.OPENAI;
+    log?.debug?.("STREAM", `Codex translation mode: openai-responses → ${codexTarget}`);
     transformStream = createSSETransformStreamWithLogger(
       "openai-responses",
       codexTarget,
@@ -1274,23 +1184,6 @@ export async function handleChatCore({
       onStreamComplete,
       apiKey,
     );
-  } else if (targetFormat !== FORMATS.OPENAI) {
-    // Same format but NOT openai (e.g. claude→claude, gemini→gemini).
-    // Use translate mode so auto-detection can kick in if upstream
-    // actually returns a different format than configured.
-    log?.debug?.("STREAM", `Translate mode (auto-detect): ${targetFormat} → ${sourceFormat}`);
-    transformStream = createSSETransformStreamWithLogger(
-      targetFormat,
-      sourceFormat,
-      provider,
-      reqLogger,
-      toolNameMap,
-      model,
-      connectionId,
-      body,
-      onStreamComplete,
-      apiKey,
-    );
   } else {
     log?.debug?.("STREAM", `Standard passthrough mode`);
     transformStream = createPassthroughStreamWithLogger(
@@ -1303,90 +1196,50 @@ export async function handleChatCore({
       apiKey,
     );
   }
-  targetFormat,
-    sourceFormat,
-    provider,
-    reqLogger,
-    toolNameMap,
-    model,
-    connectionId,
-    body,
-    onStreamComplete,
-    apiKey,
-      );
-} else if (targetFormat !== FORMATS.OPENAI) {
-  // Same format but NOT openai (e.g. claude→claude, gemini→gemini).
-  // Use translate mode so auto-detection can kick in if upstream
-  // actually returns a different format than configured.
-  log?.debug?.("STREAM", `Translate mode (auto-detect): ${targetFormat} → ${sourceFormat}`);
-  transformStream = createSSETransformStreamWithLogger(
-    targetFormat,
-    sourceFormat,
-    provider,
-    reqLogger,
-    toolNameMap,
-    model,
-    connectionId,
-    body,
-    onStreamComplete,
-    apiKey,
+
+  const transformedBody = pipeWithDisconnect(
+    providerResponse,
+    transformStream,
+    streamController,
   );
-} else {
-  log?.debug?.("STREAM", `Standard passthrough mode`);
-  transformStream = createPassthroughStreamWithLogger(
-    provider,
-    reqLogger,
-    model,
-    connectionId,
-    body,
-    onStreamComplete,
-    apiKey,
-  );
+
+  const totalLatency = Date.now() - requestStartTime;
+  const streamingDetail = {
+    provider: provider || "unknown",
+    model: model || "unknown",
+    connectionId: connectionId || undefined,
+    timestamp: new Date().toISOString(),
+    latency: {
+      ttft: 0,
+      total: Date.now() - requestStartTime,
+    },
+    tokens: { prompt_tokens: 0, completion_tokens: 0 },
+    request: extractRequestConfig(body, stream),
+    providerRequest: finalBody || translatedBody || null,
+    providerResponse: "[Streaming - raw response not captured]",
+    response: {
+      content: "[Streaming in progress...]",
+      thinking: null,
+      type: "streaming",
+    },
+    status: "success",
+    id: streamDetailId,
+  };
+
+  saveRequestDetail(streamingDetail).catch((err) => {
+    console.error(
+      "[RequestDetail] Failed to save streaming request:",
+      err.message,
+    );
+  });
+
+  return {
+    success: true,
+    response: new Response(transformedBody, {
+      headers: responseHeaders,
+    }),
+  };
 }
-
-const transformedBody = pipeWithDisconnect(
-  providerResponse,
-  transformStream,
-  streamController,
-);
-
-const totalLatency = Date.now() - requestStartTime;
-const streamingDetail = {
-  provider: provider || "unknown",
-  model: model || "unknown",
-  connectionId: connectionId || undefined,
-  timestamp: new Date().toISOString(),
-  latency: {
-    ttft: 0,
-    total: Date.now() - requestStartTime,
-  },
-  tokens: { prompt_tokens: 0, completion_tokens: 0 },
-  request: extractRequestConfig(body, stream),
-  providerRequest: finalBody || translatedBody || null,
-  providerResponse: "[Streaming - raw response not captured]",
-  response: {
-    content: "[Streaming in progress...]",
-    thinking: null,
-    type: "streaming",
-  },
-  status: "success",
-  id: streamDetailId,
-};
-
-saveRequestDetail(streamingDetail).catch((err) => {
-  console.error(
-    "[RequestDetail] Failed to save streaming request:",
-    err.message,
-  );
-});
-
-return {
-  success: true,
-  response: new Response(transformedBody, {
-    headers: responseHeaders,
-  }),
-};
-
 
 /**
  * Check if token is expired or about to expire

@@ -8,11 +8,11 @@ const nextConfig = {
   },
   experimental: {
   },
-  webpack: (config, { isServer }) => {
-    // Stop watching logs directory to prevent HMR during streaming
-    config.watchOptions = { ...config.watchOptions, ignored: /[\\/](logs|\.next)[\\/]/ };
-    return config;
-  },
+  // webpack: (config, { isServer }) => {
+  //   // Stop watching logs directory to prevent HMR during streaming
+  //   config.watchOptions = { ...config.watchOptions, ignored: /[\\/](logs|\.next)[\\/]/ };
+  //   return config;
+  // },
   async rewrites() {
     return [
       {
