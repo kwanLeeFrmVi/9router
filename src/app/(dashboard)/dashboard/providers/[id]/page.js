@@ -69,7 +69,7 @@ export default function ProviderDetailPage() {
     ? (providerNode?.prefix || providerId)
     : providerAlias;
   const activeConnection = connections.find((conn) => conn.isActive !== false) || null;
-  const allProviderModels = models.length > 0 ? models : remoteModels;
+  const allProviderModels = remoteModels.length > 0 ? remoteModels : models;
   const allProviderModelIds = useMemo(
     () => allProviderModels.map((model) => model.id),
     [allProviderModels]
@@ -216,11 +216,6 @@ export default function ProviderDetailPage() {
   ]);
 
   const fetchRemoteModels = useCallback(async () => {
-    if (isCompatible || providerInfo?.passthroughModels || models.length > 0) {
-      setRemoteModels([]);
-      return;
-    }
-
     if (!activeConnection) {
       setRemoteModels([]);
       return;
@@ -255,7 +250,7 @@ export default function ProviderDetailPage() {
     } finally {
       setLoadingRemoteModels(false);
     }
-  }, [activeConnection, isCompatible, models.length, providerInfo?.passthroughModels]);
+  }, [activeConnection]);
 
   useEffect(() => {
     fetchRemoteModels();
