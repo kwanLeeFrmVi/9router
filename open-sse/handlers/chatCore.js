@@ -847,10 +847,7 @@ export async function handleChatCore({
               finish_reason: jsonResponse.status || "unknown",
             },
             status: "success",
-<<<<<<< HEAD
             endpoint: clientRawRequest?.endpoint || null
-=======
->>>>>>> 75d1169 (fix(translator): fix OpenAI Responses API translation to Claude format)
           }).catch(() => { });
 
           // If client sent a Chat Completions request (not Responses API),
@@ -938,10 +935,7 @@ export async function handleChatCore({
                 timestamp: new Date().toISOString(),
                 connectionId: connectionId || undefined,
                 apiKey: apiKey || undefined,
-<<<<<<< HEAD
                 endpoint: clientRawRequest?.endpoint || null
-=======
->>>>>>> 75d1169 (fix(translator): fix OpenAI Responses API translation to Claude format)
               }).catch(() => { });
             }
 
@@ -963,10 +957,7 @@ export async function handleChatCore({
                 finish_reason: parsed.choices?.[0]?.finish_reason || "unknown",
               },
               status: "success",
-<<<<<<< HEAD
               endpoint: clientRawRequest?.endpoint || null
-=======
->>>>>>> 75d1169 (fix(translator): fix OpenAI Responses API translation to Claude format)
             }).catch(() => { });
 
             return {
@@ -1395,7 +1386,7 @@ return {
     headers: responseHeaders,
   }),
 };
-  }
+
 
 /**
  * Check if token is expired or about to expire
