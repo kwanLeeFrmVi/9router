@@ -287,6 +287,78 @@ export const PROVIDERS = {
   nvidia: {
     baseUrl: "https://integrate.api.nvidia.com/v1/chat/completions",
     format: "openai"
+  },
+  anthropic: {
+    baseUrl: "https://api.anthropic.com/v1/messages",
+    format: "claude",
+    headers: {
+      "Anthropic-Version": "2023-06-01",
+      "Anthropic-Beta": "claude-code-20250219,interleaved-thinking-2025-05-14"
+    }
+  },
+  deepseek: {
+    baseUrl: "https://api.deepseek.com/chat/completions",
+    format: "openai"
+  },
+  groq: {
+    baseUrl: "https://api.groq.com/openai/v1/chat/completions",
+    format: "openai"
+  },
+  xai: {
+    baseUrl: "https://api.x.ai/v1/chat/completions",
+    format: "openai"
+  },
+  mistral: {
+    baseUrl: "https://api.mistral.ai/v1/chat/completions",
+    format: "openai"
+  },
+  perplexity: {
+    baseUrl: "https://api.perplexity.ai/chat/completions",
+    format: "openai"
+  },
+  together: {
+    baseUrl: "https://api.together.xyz/v1/chat/completions",
+    format: "openai"
+  },
+  fireworks: {
+    baseUrl: "https://api.fireworks.ai/inference/v1/chat/completions",
+    format: "openai"
+  },
+  cerebras: {
+    baseUrl: "https://api.cerebras.ai/v1/chat/completions",
+    format: "openai"
+  },
+  cohere: {
+    baseUrl: "https://api.cohere.ai/v1/chat/completions",
+    format: "openai"
+  },
+  nebius: {
+    baseUrl: "https://api.studio.nebius.ai/v1/chat/completions",
+    format: "openai"
+  },
+  siliconflow: {
+    baseUrl: "https://api.siliconflow.cn/v1/chat/completions",
+    format: "openai"
+  },
+  hyperbolic: {
+    baseUrl: "https://api.hyperbolic.xyz/v1/chat/completions",
+    format: "openai"
+  },
+  deepgram: {
+    baseUrl: "https://api.deepgram.com/v1/listen",
+    format: "openai"
+  },
+  assemblyai: {
+    baseUrl: "https://api.assemblyai.com/v1/audio/transcriptions",
+    format: "openai"
+  },
+  nanobanana: {
+    baseUrl: "https://api.nanobananaapi.ai/v1/chat/completions",
+    format: "openai"
+  },
+  chutes: {
+    baseUrl: "https://llm.chutes.ai/v1/chat/completions",
+    format: "openai"
   }
 };
 
