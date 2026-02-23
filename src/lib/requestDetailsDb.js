@@ -2,62 +2,17 @@ import path from "path";
 import os from "os";
 import fs from "fs";
 
-const isCloud = typeof caches !== "undefined" && typeof caches === "object";
+const isCloud = typeof caches !== 'undefined' || typeof caches === 'object';
 
-const DEFAULT_MAX_RECORDS = 200;
-const DEFAULT_BATCH_SIZE = 20;
-const DEFAULT_FLUSH_INTERVAL_MS = 5000;
-const DEFAULT_MAX_JSON_SIZE = 5 * 1024; // 5KB default, configurable via settings
-const CONFIG_CACHE_TTL_MS = 5000;
+// ============================================================================
+// CONFIGURATION: Batch Processing Settings
+// ============================================================================
 
-function getAppName() {
-  return "9router";
-}
-
-function getUserDataDir() {
-  if (isCloud) return "/tmp";
-  if (process.env.DATA_DIR) return process.env.DATA_DIR;
-
-  const platform = process.platform;
-  const homeDir = os.homedir();
-  const appName = getAppName();
-
-  if (platform === "win32") {
-    return path.join(process.env.APPDATA || path.join(homeDir, "AppData", "Roaming"), appName);
-  }
-  return path.join(homeDir, `.${appName}`);
-}
-
-const DATA_DIR = getUserDataDir();
-const DB_FILE = isCloud ? null : path.join(DATA_DIR, "request-details.json");
-
-if (!isCloud && !fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-}
-
-let dbInstance = null;
-
-async function getDb() {
-  if (isCloud) return null;
-  if (!dbInstance) {
-    const adapter = new JSONFile(DB_FILE);
-    const db = new Low(adapter, { records: [] });
-    await db.read();
-    if (!db.data?.records) db.data = { records: [] };
-    dbInstance = db;
-  }
-  return dbInstance;
-}
-
-// Config cache
-let cachedConfig = null;
-let cachedConfigTs = 0;
-
+/**
+ * Get observability configuration from settings.
+ * Falls back to environment variables, then defaults.
+ */
 async function getObservabilityConfig() {
-  if (cachedConfig && (Date.now() - cachedConfigTs) < CONFIG_CACHE_TTL_MS) {
-    return cachedConfig;
-  }
-
   try {
     const { getSettings } = await import("@/lib/localDb");
     const settings = await getSettings();
@@ -66,24 +21,36 @@ async function getObservabilityConfig() {
       ? settings.observabilityEnabled
       : envEnabled;
 
-    cachedConfig = {
+    return {
       enabled,
-      maxRecords: settings.observabilityMaxRecords || parseInt(process.env.OBSERVABILITY_MAX_RECORDS || String(DEFAULT_MAX_RECORDS), 10),
-      batchSize: settings.observabilityBatchSize || parseInt(process.env.OBSERVABILITY_BATCH_SIZE || String(DEFAULT_BATCH_SIZE), 10),
-      flushIntervalMs: settings.observabilityFlushIntervalMs || parseInt(process.env.OBSERVABILITY_FLUSH_INTERVAL_MS || String(DEFAULT_FLUSH_INTERVAL_MS), 10),
-      maxJsonSize: (settings.observabilityMaxJsonSize || parseInt(process.env.OBSERVABILITY_MAX_JSON_SIZE || "5", 10)) * 1024,
+      maxRecords: settings.observabilityMaxRecords || parseInt(process.env.OBSERVABILITY_MAX_RECORDS || '1000', 10),
+      batchSize: settings.observabilityBatchSize || parseInt(process.env.OBSERVABILITY_BATCH_SIZE || '20', 10),
+      flushIntervalMs: settings.observabilityFlushIntervalMs || parseInt(process.env.OBSERVABILITY_FLUSH_INTERVAL_MS || '5000', 10),
+      maxJsonSize: (settings.observabilityMaxJsonSize || parseInt(process.env.OBSERVABILITY_MAX_JSON_SIZE || '1024', 10)) * 1024
     };
-  } catch {
-    cachedConfig = {
+  } catch (error) {
+    console.error("[requestDetailsDb] Failed to load observability config:", error);
+    return {
       enabled: true,
-      maxRecords: DEFAULT_MAX_RECORDS,
-      batchSize: DEFAULT_BATCH_SIZE,
-      flushIntervalMs: DEFAULT_FLUSH_INTERVAL_MS,
-      maxJsonSize: DEFAULT_MAX_JSON_SIZE,
+      maxRecords: 1000,
+      batchSize: 20,
+      flushIntervalMs: 5000,
+      maxJsonSize: 1024 * 1024
     };
   }
+}
 
-  cachedConfigTs = Date.now();
+// Cache config to avoid repeated database reads
+let cachedConfig = null;
+let cachedConfigTs = 0;
+const CONFIG_CACHE_TTL_MS = 5000;
+
+async function getCachedObservabilityConfig() {
+  if (!cachedConfig || (Date.now() - cachedConfigTs) > CONFIG_CACHE_TTL_MS) {
+    cachedConfig = await getObservabilityConfig();
+    cachedConfigTs = Date.now();
+  }
+
   return cachedConfig;
 }
 
@@ -178,18 +145,39 @@ if (!isCloud && fs && typeof fs.existsSync === "function") {
  * @type {Array<object>}
  */
 let writeBuffer = [];
+
+/**
+ * Timer reference for auto-flush mechanism.
+ * Ensures data is written even during low traffic periods.
+ * @type {NodeJS.Timeout|null}
+ */
 let flushTimer = null;
+
+/**
+ * Flag indicating if a flush operation is currently in progress.
+ * Prevents concurrent flushes.
+ * @type {boolean}
+ */
 let isFlushing = false;
 
-function safeJsonStringify(obj, maxSize) {
-  try {
-    const str = JSON.stringify(obj);
-    if (str.length > maxSize) {
-      return JSON.stringify({ _truncated: true, _originalSize: str.length, _preview: str.substring(0, 200) });
+/**
+ * Get SQLite database instance (singleton)
+ */
+export async function getRequestDetailsDb() {
+  if (isCloud) {
+    // In-memory mock for Workers
+    if (!dbInstance) {
+      dbInstance = {
+        prepare: () => ({
+          run: () => { },
+          get: () => null,
+          all: () => []
+        }),
+        exec: () => { },
+        pragma: () => { }
+      };
     }
-    return str;
-  } catch {
-    return "{}";
+    return dbInstance;
   }
 
   if (!dbInstance) {
@@ -238,34 +226,38 @@ function safeJsonStringify(obj, maxSize) {
   return dbInstance;
 }
 
-function sanitizeHeaders(headers) {
-  if (!headers || typeof headers !== "object") return {};
-  const sensitiveKeys = ["authorization", "x-api-key", "cookie", "token", "api-key"];
-  const sanitized = { ...headers };
-  for (const key of Object.keys(sanitized)) {
-    if (sensitiveKeys.some(s => key.toLowerCase().includes(s))) {
-      delete sanitized[key];
-    }
-  }
-  return sanitized;
-}
-
+/**
+ * Generate unique ID for request detail
+ */
 function generateDetailId(model) {
   const timestamp = new Date().toISOString();
   const random = Math.random().toString(36).substring(2, 8);
-  const modelPart = model ? model.replace(/[^a-zA-Z0-9-]/g, "-") : "unknown";
+  const modelPart = model ? model.replace(/[^a-zA-Z0-9-]/g, '-') : 'unknown';
   return `${timestamp}-${random}-${modelPart}`;
 }
 
+/**
+ * Flush all buffered items to database in a single transaction.
+ * This function is called automatically when:
+ * 1. Buffer size reaches OBSERVABILITY_BATCH_SIZE
+ * 2. OBSERVABILITY_FLUSH_INTERVAL_MS elapses
+ * 3. Process is shutting down (graceful shutdown)
+ *
+ * @private
+ */
 async function flushToDatabase() {
-  if (isCloud || isFlushing || writeBuffer.length === 0) return;
+  if (isCloud || isFlushing || writeBuffer.length === 0) {
+    return;
+  }
 
   isFlushing = true;
+
   try {
+    // Take a snapshot of the buffer and clear it immediately
     const itemsToSave = [...writeBuffer];
     writeBuffer = [];
 
-    const db = await getDb();
+    const db = await getRequestDetailsDb();
     const config = await getObservabilityConfig();
 
     // Prepare statements outside transaction for better performance
@@ -285,49 +277,114 @@ async function flushToDatabase() {
       )
     `);
 
-    // Truncate oversized JSON fields
-    const maxSize = config.maxJsonSize;
-    for (const field of ["request", "providerRequest", "providerResponse", "response"]) {
-      const str = JSON.stringify(record[field]);
-      if (str.length > maxSize) {
-        record[field] = { _truncated: true, _originalSize: str.length, _preview: str.substring(0, 200) };
+    // Execute all writes in a single transaction for atomicity
+    const transaction = db.transaction((items) => {
+      const maxJsonSize = config.maxJsonSize;
+
+      for (const item of items) {
+        if (!item.id) {
+          item.id = generateDetailId(item.model);
+        }
+
+        if (!item.timestamp) {
+          item.timestamp = new Date().toISOString();
+        }
+
+        // Sanitize headers if present
+        if (item.request && item.request.headers) {
+          item.request.headers = sanitizeHeaders(item.request.headers);
+        }
+
+        insertStmt.run(
+          item.id,
+          item.provider || null,
+          item.model || null,
+          item.connectionId || null,
+          new Date(item.timestamp).getTime(),
+          item.status || null,
+          JSON.stringify(item.latency || {}),
+          JSON.stringify(item.tokens || {}),
+          safeJsonStringify(item.request || {}, maxJsonSize),
+          safeJsonStringify(item.providerRequest || {}, maxJsonSize),
+          safeJsonStringify(item.providerResponse || {}, maxJsonSize),
+          safeJsonStringify(item.response || {}, maxJsonSize)
+        );
       }
-    }
 
-    // Upsert: replace existing record with same id
-    const idx = db.data.records.findIndex(r => r.id === record.id);
-    if (idx !== -1) {
-      db.data.records[idx] = record;
-    } else {
-      db.data.records.push(record);
+      // Cleanup old records once per batch (not per item)
+      deleteStmt.run(config.maxRecords);
+    });
+
+    transaction(itemsToSave);
+  } catch (error) {
+    console.error("[requestDetailsDb] Batch write failed:", error);
+  } finally {
+    isFlushing = false;
+  }
+}
+
+/**
+ * Safely stringify an object with a size limit.
+ * Truncates the result if it exceeds the limit.
+ * @param {object} obj - Object to stringify
+ * @param {number} maxSize - Maximum string size in bytes
+ * @returns {string}
+ */
+function safeJsonStringify(obj, maxSize) {
+  try {
+    const str = JSON.stringify(obj);
+    if (str.length > maxSize) {
+      // Return valid JSON instead of truncated invalid string
+      return JSON.stringify({ _truncated: true, _originalSize: str.length, _preview: str.substring(0, 200) });
+    }
+    return str;
+  } catch (error) {
+    return JSON.stringify({ error: "Failed to stringify object", message: error.message });
+  }
+}
+
+/**
+ * Sanitize sensitive headers from request
+ */
+function sanitizeHeaders(headers) {
+  if (!headers || typeof headers !== 'object') return {};
+
+  const sensitiveKeys = ['authorization', 'x-api-key', 'cookie', 'token', 'api-key'];
+  const sanitized = { ...headers };
+
+  for (const key of Object.keys(sanitized)) {
+    if (sensitiveKeys.some(sensitive => key.toLowerCase().includes(sensitive))) {
+      delete sanitized[key];
     }
   }
 
-    // Keep only latest maxRecords (sorted by timestamp desc)
-    db.data.records.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-  if (db.data.records.length > config.maxRecords) {
-    db.data.records = db.data.records.slice(0, config.maxRecords);
-  }
-
-  await db.write();
-} catch (error) {
-  console.error("[requestDetailsDb] Batch write failed:", error);
-} finally {
-  isFlushing = false;
-}
+  return sanitized;
 }
 
+/**
+ * Save request detail to SQLite (batched for performance).
+ * Details are accumulated in memory and flushed to database in batches.
+ *
+ * @param {object} detail - Request detail object
+ * @see {@link flushToDatabase} for batch write implementation
+ */
 export async function saveRequestDetail(detail) {
   if (isCloud) return;
 
-  const config = await getObservabilityConfig();
-  if (!config.enabled) return;
+  const config = await getCachedObservabilityConfig();
+  if (!config.enabled) {
+    return;
+  }
 
   writeBuffer.push(detail);
 
   if (writeBuffer.length >= config.batchSize) {
     await flushToDatabase();
-    if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+
+    if (flushTimer) {
+      clearTimeout(flushTimer);
+      flushTimer = null;
+    }
   } else if (!flushTimer) {
     flushTimer = setTimeout(() => {
       flushToDatabase().catch(() => { });
@@ -336,59 +393,40 @@ export async function saveRequestDetail(detail) {
   }
 }
 
-export async function getRequestDetails(filter = {}) {
-  if (isCloud) {
-    return { details: [], pagination: { page: 1, pageSize: 50, totalItems: 0, totalPages: 0, hasNext: false, hasPrev: false } };
-  }
+// ============================================================================
+// GRACEFUL SHUTDOWN HANDLER
+// ============================================================================
 
-  const db = await getDb();
-  let records = [...db.data.records];
-
-  // Apply filters
-  if (filter.provider) records = records.filter(r => r.provider === filter.provider);
-  if (filter.model) records = records.filter(r => r.model === filter.model);
-  if (filter.connectionId) records = records.filter(r => r.connectionId === filter.connectionId);
-  if (filter.status) records = records.filter(r => r.status === filter.status);
-  if (filter.startDate) records = records.filter(r => new Date(r.timestamp) >= new Date(filter.startDate));
-  if (filter.endDate) records = records.filter(r => new Date(r.timestamp) <= new Date(filter.endDate));
-
-  // Sort desc
-  records.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-
-  const totalItems = records.length;
-  const page = filter.page || 1;
-  const pageSize = filter.pageSize || 50;
-  const totalPages = Math.ceil(totalItems / pageSize);
-  const details = records.slice((page - 1) * pageSize, page * pageSize);
-
-  return {
-    details,
-    pagination: { page, pageSize, totalItems, totalPages, hasNext: page < totalPages, hasPrev: page > 1 },
-  };
-}
-
-export async function getRequestDetailById(id) {
-  if (isCloud) return null;
-
-  const db = await getDb();
-  return db.data.records.find(r => r.id === id) || null;
-}
-
-// Graceful shutdown
 let shutdownHandlerRegistered = false;
 
+/**
+ * Register process shutdown handlers to flush remaining data before exit.
+ * Should be called once when the module initializes.
+ */
 function ensureShutdownHandler() {
-  if (shutdownHandlerRegistered || isCloud) return;
+  if (shutdownHandlerRegistered || isCloud) {
+    return;
+  }
 
   const handler = async () => {
-    if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
-    if (writeBuffer.length > 0) await flushToDatabase();
+    // Clear timer to prevent any pending flush
+    if (flushTimer) {
+      clearTimeout(flushTimer);
+      flushTimer = null;
+    }
+
+    // Flush any remaining data in buffer
+    if (writeBuffer.length > 0) {
+      console.log(`[requestDetailsDb] Flushing ${writeBuffer.length} items before shutdown...`);
+      await flushToDatabase();
+    }
   };
 
-  process.on("beforeExit", handler);
-  process.on("SIGINT", handler);
-  process.on("SIGTERM", handler);
-  process.on("exit", handler);
+  // Register handlers for various termination signals
+  process.on('beforeExit', handler);
+  process.on('SIGINT', handler);
+  process.on('SIGTERM', handler);
+  process.on('exit', handler);
 
   shutdownHandlerRegistered = true;
 }
@@ -524,4 +562,60 @@ export async function getRequestDetailById(id) {
     providerResponse: safeJsonParse(row.provider_response),
     response: safeJsonParse(row.response)
   };
+}
+
+/**
+ * Get speed statistics for models (tokens/s from last successful request)
+ * @param {Array<{provider: string, model: string}>} providerModelPairs - Array of provider/model pairs
+ * @returns {Promise<Map<string, {speed: number, lastUsed: string}>>} Map of "provider/model" to speed stats
+ */
+export async function getModelSpeedStats(providerModelPairs) {
+  const db = await getRequestDetailsDb();
+  const speedMap = new Map();
+
+  if (isCloud || !providerModelPairs || providerModelPairs.length === 0) {
+    return speedMap;
+  }
+
+  const safeJsonParse = (str, fallback = {}) => {
+    try { return JSON.parse(str || '{}'); }
+    catch { return fallback; }
+  };
+
+  for (const { provider, model } of providerModelPairs) {
+    try {
+      const stmt = prepareStatement(db, `
+        SELECT provider, model, timestamp, latency, tokens
+        FROM request_details
+        WHERE provider = ? AND model = ? AND status = 'success'
+        ORDER BY timestamp DESC
+        LIMIT 1
+      `);
+
+      const row = stmt.get(provider, model);
+
+      if (row) {
+        const latency = safeJsonParse(row.latency);
+        const tokens = safeJsonParse(row.tokens);
+        const totalMs = latency?.total || 0;
+        const completionTokens = tokens?.completion_tokens || 0;
+
+        // Calculate speed: tokens per second
+        let speed = 0;
+        if (totalMs > 0 && completionTokens > 0) {
+          speed = completionTokens / (totalMs / 1000);
+        }
+
+        const key = `${provider}/${model}`;
+        speedMap.set(key, {
+          speed,
+          lastUsed: new Date(row.timestamp).toISOString()
+        });
+      }
+    } catch (error) {
+      console.error(`[getModelSpeedStats] Failed to get speed for ${provider}/${model}:`, error.message);
+    }
+  }
+
+  return speedMap;
 }
