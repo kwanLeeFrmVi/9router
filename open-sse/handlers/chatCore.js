@@ -1037,18 +1037,20 @@ export async function handleChatCore({
       ? translateNonStreamingResponse(responseBody, targetFormat, sourceFormat)
       : responseBody;
 
-    // Ensure OpenAI-required fields are present (needed for Letta and other strict clients)
-    if (!translatedResponse.object) translatedResponse.object = "chat.completion";
-    if (!translatedResponse.created) translatedResponse.created = Math.floor(Date.now() / 1000);
+    if (sourceFormat !== FORMATS.CLAUDE) {
+      // Ensure OpenAI-required fields are present (needed for Letta and other strict clients)
+      if (!translatedResponse.object) translatedResponse.object = "chat.completion";
+      if (!translatedResponse.created) translatedResponse.created = Math.floor(Date.now() / 1000);
 
-    // Strip Azure-specific non-standard fields
-    if (translatedResponse.prompt_filter_results !== undefined) {
-      delete translatedResponse.prompt_filter_results;
-    }
-    if (translatedResponse?.choices) {
-      for (const choice of translatedResponse.choices) {
-        if (choice.content_filter_results !== undefined) {
-          delete choice.content_filter_results;
+      // Strip Azure-specific non-standard fields
+      if (translatedResponse.prompt_filter_results !== undefined) {
+        delete translatedResponse.prompt_filter_results;
+      }
+      if (translatedResponse?.choices) {
+        for (const choice of translatedResponse.choices) {
+          if (choice.content_filter_results !== undefined) {
+            delete choice.content_filter_results;
+          }
         }
       }
     }
@@ -1241,6 +1243,7 @@ export async function handleChatCore({
       body,
       onStreamComplete,
       apiKey,
+      sourceFormat,
     );
   }
 
