@@ -1,23 +1,34 @@
 import { NextResponse } from "next/server";
 import { getProviderConnections, createProviderConnection, getProviderNodeById } from "@/models";
+import { withApiCache } from "@/lib/apiCache";
+import { API_CACHE_KEYS } from "@/lib/cacheKeys";
 import { APIKEY_PROVIDERS } from "@/shared/constants/config";
 import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider } from "@/shared/constants/providers";
+
+const PROVIDERS_CACHE_TTL_MS = Math.max(
+  Number.parseInt(process.env.API_CACHE_PROVIDERS_TTL_MS || "2000", 10) || 0,
+  200
+);
 
 // GET /api/providers - List all connections
 export async function GET() {
   try {
-    const connections = await getProviderConnections();
-    
-    // Hide sensitive fields
-    const safeConnections = connections.map(c => ({
-      ...c,
-      apiKey: undefined,
-      accessToken: undefined,
-      refreshToken: undefined,
-      idToken: undefined,
-    }));
+    const payload = await withApiCache(API_CACHE_KEYS.providersList, PROVIDERS_CACHE_TTL_MS, async () => {
+      const connections = await getProviderConnections();
 
-    return NextResponse.json({ connections: safeConnections });
+      // Hide sensitive fields
+      const safeConnections = connections.map(c => ({
+        ...c,
+        apiKey: undefined,
+        accessToken: undefined,
+        refreshToken: undefined,
+        idToken: undefined,
+      }));
+
+      return { connections: safeConnections };
+    });
+
+    return NextResponse.json(payload);
   } catch (error) {
     console.log("Error fetching providers:", error);
     return NextResponse.json({ error: "Failed to fetch providers" }, { status: 500 });
@@ -31,9 +42,9 @@ export async function POST(request) {
     const { provider, apiKey, name, priority, globalPriority, defaultModel, testStatus } = body;
 
     // Validation
-    const isValidProvider = APIKEY_PROVIDERS[provider] || 
-                          isOpenAICompatibleProvider(provider) || 
-                          isAnthropicCompatibleProvider(provider);
+    const isValidProvider = APIKEY_PROVIDERS[provider] ||
+      isOpenAICompatibleProvider(provider) ||
+      isAnthropicCompatibleProvider(provider);
 
     if (!provider || !isValidProvider) {
       return NextResponse.json({ error: "Invalid provider" }, { status: 400 });
