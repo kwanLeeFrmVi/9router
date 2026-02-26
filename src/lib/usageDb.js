@@ -476,8 +476,15 @@ export async function getUsageStats(period = "all") {
     history = history.filter((e) => new Date(e.timestamp).getTime() >= cutoff);
   }
 
-  // Import localDb to get provider connection names and API keys
-  const { getProviderConnections, getApiKeys, getProviderNodes } = await import("@/lib/localDb.js");
+  // Import localDb to get provider connection names, API keys, pricing, and provider nodes
+  const { getProviderConnections, getApiKeys, getPricing, getProviderNodes } = await import("@/lib/localDb.js");
+
+  // Pre-fetch pricing to populate React cache and prevent looping bottleneck
+  try {
+    await getPricing();
+  } catch (error) {
+    console.warn("Could not pre-fetch pricing for usage stats:", error.message);
+  }
 
   // Fetch all provider connections to get account names
   let allConnections = [];

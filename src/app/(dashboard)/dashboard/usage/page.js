@@ -40,6 +40,7 @@ function UsageContent() {
         options={[
           { value: "overview", label: "Overview" },
           { value: "details", label: "Details" },
+          { value: "logs", label: "Logs" },
         ]}
         value={activeTab}
         onChange={handleTabChange}
