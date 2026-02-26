@@ -167,6 +167,29 @@ const PERIODS = [
   { value: "30d", label: "30D" },
   { value: "60d", label: "60D" },
 ];
+function filterItemsByDateRange(items, startDate, endDate) {
+  if (!startDate && !endDate) return items;
+
+  const startTs = startDate ? new Date(startDate).getTime() : null;
+  const endTs = endDate
+    ? (() => {
+      const parsed = new Date(endDate);
+      if (!endDate.includes("T")) {
+        parsed.setHours(23, 59, 59, 999);
+      }
+      return parsed.getTime();
+    })()
+    : null;
+
+  return items.filter((item) => {
+    if (!item.lastUsed) return false;
+    const itemTs = new Date(item.lastUsed).getTime();
+    if (Number.isNaN(itemTs)) return false;
+    if (startTs !== null && itemTs < startTs) return false;
+    if (endTs !== null && itemTs > endTs) return false;
+    return true;
+  });
+}
 
 export default function UsageStats() {
   const router = useRouter();
@@ -181,6 +204,8 @@ export default function UsageStats() {
   const [tableView, setTableView] = useState("model");
   const [providers, setProviders] = useState([]);
   const [period, setPeriod] = useState("7d");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
 
   // Fetch connected providers once, deduplicate by provider type
   useEffect(() => {
@@ -196,7 +221,7 @@ export default function UsageStats() {
         });
         setProviders(unique);
       })
-      .catch(() => {});
+      .catch(() => { });
   }, []);
 
   // Fetch filtered stats via REST when period changes
@@ -210,7 +235,7 @@ export default function UsageStats() {
       .then((data) => {
         if (data) setStats((prev) => ({ ...prev, ...data }));
       })
-      .catch(() => {})
+      .catch(() => { })
       .finally(() => {
         setLoading(false);
         setFetching(false);
@@ -260,11 +285,16 @@ export default function UsageStats() {
     switch (tableView) {
       case "model": {
         const pendingMap = stats.pending?.byModel || {};
+        const filteredItems = filterItemsByDateRange(
+          sortData(stats.byModel, pendingMap, sortBy, sortOrder),
+          startDate,
+          endDate
+        );
         return {
           columns: MODEL_COLUMNS,
-          groupedData: groupDataByKey(sortData(stats.byModel, pendingMap, sortBy, sortOrder), "rawModel"),
+          groupedData: groupDataByKey(filteredItems, "rawModel"),
           storageKey: "usage-stats:expanded-models",
-          emptyMessage: "No usage recorded yet.",
+          emptyMessage: startDate || endDate ? "No usage found in selected date range." : "No usage recorded yet.",
           renderSummaryCells: (group) => (
             <>
               <td className="px-6 py-3 text-text-muted">—</td>
@@ -293,11 +323,16 @@ export default function UsageStats() {
             }
           });
         }
+        const filteredItems = filterItemsByDateRange(
+          sortData(stats.byAccount, pendingMap, sortBy, sortOrder),
+          startDate,
+          endDate
+        );
         return {
           columns: ACCOUNT_COLUMNS,
-          groupedData: groupDataByKey(sortData(stats.byAccount, pendingMap, sortBy, sortOrder), "accountName"),
+          groupedData: groupDataByKey(filteredItems, "accountName"),
           storageKey: "usage-stats:expanded-accounts",
-          emptyMessage: "No account-specific usage recorded yet.",
+          emptyMessage: startDate || endDate ? "No account usage found in selected date range." : "No account-specific usage recorded yet.",
           renderSummaryCells: (group) => (
             <>
               <td className="px-6 py-3 text-text-muted">—</td>
@@ -318,11 +353,16 @@ export default function UsageStats() {
         };
       }
       case "apiKey": {
+        const filteredItems = filterItemsByDateRange(
+          sortData(stats.byApiKey, {}, sortBy, sortOrder),
+          startDate,
+          endDate
+        );
         return {
           columns: API_KEY_COLUMNS,
-          groupedData: groupDataByKey(sortData(stats.byApiKey, {}, sortBy, sortOrder), "keyName"),
+          groupedData: groupDataByKey(filteredItems, "keyName"),
           storageKey: "usage-stats:expanded-apikeys",
-          emptyMessage: "No API key usage recorded yet.",
+          emptyMessage: startDate || endDate ? "No API key usage found in selected date range." : "No API key usage recorded yet.",
           renderSummaryCells: (group) => (
             <>
               <td className="px-6 py-3 text-text-muted">—</td>
@@ -344,11 +384,16 @@ export default function UsageStats() {
       }
       case "endpoint":
       default: {
+        const filteredItems = filterItemsByDateRange(
+          sortData(stats.byEndpoint, {}, sortBy, sortOrder),
+          startDate,
+          endDate
+        );
         return {
           columns: ENDPOINT_COLUMNS,
-          groupedData: groupDataByKey(sortData(stats.byEndpoint, {}, sortBy, sortOrder), "endpoint"),
+          groupedData: groupDataByKey(filteredItems, "endpoint"),
           storageKey: "usage-stats:expanded-endpoints",
-          emptyMessage: "No endpoint usage recorded yet.",
+          emptyMessage: startDate || endDate ? "No endpoint usage found in selected date range." : "No endpoint usage recorded yet.",
           renderSummaryCells: (group) => (
             <>
               <td className="px-6 py-3 text-text-muted">—</td>
@@ -369,7 +414,7 @@ export default function UsageStats() {
         };
       }
     }
-  }, [stats, tableView, sortBy, sortOrder]);
+  }, [stats, tableView, sortBy, sortOrder, startDate, endDate]);
 
   if (!stats && !loading) return <div className="text-text-muted">Failed to load usage statistics.</div>;
 
@@ -421,7 +466,7 @@ export default function UsageStats() {
 
       {/* Table with dropdown selector */}
       <div className="flex flex-col gap-3">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-end justify-between gap-3">
           <select
             value={tableView}
             onChange={(e) => setTableView(e.target.value)}
@@ -431,6 +476,40 @@ export default function UsageStats() {
               <option key={opt.value} value={opt.value}>{opt.label}</option>
             ))}
           </select>
+
+          <div className="flex flex-wrap items-end gap-2">
+            <div className="flex flex-col gap-1">
+              <label htmlFor="usage-table-start-date" className="text-xs text-text-muted">Start</label>
+              <input
+                id="usage-table-start-date"
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                className="px-3 py-1.5 rounded-lg border border-border bg-bg-subtle text-sm text-text focus:outline-none focus:ring-2 focus:ring-primary/50"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label htmlFor="usage-table-end-date" className="text-xs text-text-muted">End</label>
+              <input
+                id="usage-table-end-date"
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                className="px-3 py-1.5 rounded-lg border border-border bg-bg-subtle text-sm text-text focus:outline-none focus:ring-2 focus:ring-primary/50"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setStartDate("");
+                setEndDate("");
+              }}
+              disabled={!startDate && !endDate}
+              className="px-3 py-1.5 rounded-lg border border-border bg-bg-subtle text-sm text-text-muted enabled:hover:text-text enabled:hover:bg-bg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Clear
+            </button>
+          </div>
         </div>
         {loading ? spinner : activeTableConfig && (
           <UsageTable
