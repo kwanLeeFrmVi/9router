@@ -1,7 +1,7 @@
 import { FORMATS } from "./formats.js";
 import { ensureToolCallIds, fixMissingToolResponses } from "./helpers/toolCallHelper.js";
 import { prepareClaudeRequest } from "./helpers/claudeHelper.js";
-import { filterToOpenAIFormat } from "./helpers/openaiHelper.js";
+import { filterToOpenAIFormat, normalizeContentToString } from "./helpers/openaiHelper.js";
 import { normalizeThinkingConfig } from "../services/provider.js";
 
 // Registry for translators
@@ -59,7 +59,7 @@ export function translateRequest(sourceFormat, targetFormat, model, body, stream
 
   // Always ensure tool_calls have id (some providers require it)
   ensureToolCallIds(result);
-  
+
   // Fix missing tool responses (insert empty tool_result if needed)
   fixMissingToolResponses(result);
 
@@ -88,6 +88,13 @@ export function translateRequest(sourceFormat, targetFormat, model, body, stream
   // This handles hybrid requests (e.g., OpenAI messages + Claude tools)
   if (targetFormat === FORMATS.OPENAI) {
     result = filterToOpenAIFormat(result);
+
+    // Some OpenAI-compatible providers don't support content arrays
+    // Normalize to string content for these providers
+    const stringOnlyProviders = ["ollama"];
+    if (provider && stringOnlyProviders.includes(provider)) {
+      result = normalizeContentToString(result);
+    }
   }
 
   // Final step: prepare request for Claude format endpoints
