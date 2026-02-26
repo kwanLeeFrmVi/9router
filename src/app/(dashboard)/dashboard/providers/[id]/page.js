@@ -1111,7 +1111,14 @@ function ModelRow({ model, fullModel, alias, selected, onToggleSelect, copied, o
       : undefined;
 
   return (
-    <div className={`group flex items-center gap-2 px-3 py-2 rounded-lg border ${borderColor} hover:bg-sidebar/50`}>
+    <div className={`group relative flex items-center gap-2 px-3 py-2 rounded-lg border ${borderColor} hover:bg-sidebar/50`}>
+      {/* Tooltip */}
+      {(model.name && model.name !== model.id) && (
+        <div className="pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 z-50 hidden group-hover:flex items-center whitespace-nowrap rounded bg-gray-900 px-2 py-1 text-xs text-white shadow-lg dark:bg-gray-700">
+          {model.name}
+          <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-900 dark:border-t-gray-700" />
+        </div>
+      )}
       {onToggleSelect && (
         <button
           type="button"
@@ -1297,6 +1304,7 @@ function PassthroughModelRow({ modelId, fullModel, copied, onCopy, onDeleteAlias
       <span
         className="material-symbols-outlined text-base text-text-muted"
         style={iconColor ? { color: iconColor } : undefined}
+        title={fullModel}
       >
         {testStatus === "ok" ? "check_circle" : testStatus === "error" ? "cancel" : "smart_toy"}
       </span>
