@@ -299,7 +299,7 @@ function formatLogDate(date = new Date()) {
   return `${d}-${m}-${y} ${h}:${min}:${s}`;
 }
 
-function getServerUsage() {
+export function getServerUsage() {
   if (isCloud) {
     return {
       cpuPercent: 0,
