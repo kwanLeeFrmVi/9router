@@ -1986,6 +1986,7 @@ function EditConnectionModal({ isOpen, connection, proxyPools, onSave, onClose }
     name: "",
     priority: 1,
     apiKey: "",
+    refreshToken: "",
   });
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
@@ -1999,6 +2000,7 @@ function EditConnectionModal({ isOpen, connection, proxyPools, onSave, onClose }
         name: connection.name || "",
         priority: connection.priority || 1,
         apiKey: "",
+        refreshToken: "",
       });
       setTestResult(null);
       setValidationResult(null);
@@ -2046,6 +2048,9 @@ function EditConnectionModal({ isOpen, connection, proxyPools, onSave, onClose }
         name: formData.name,
         priority: formData.priority,
       };
+      if (isOAuth && connection.provider === "kiro" && formData.refreshToken.trim()) {
+        updates.refreshToken = formData.refreshToken.trim();
+      }
       if (!isOAuth && formData.apiKey) {
         updates.apiKey = formData.apiKey;
         let isValid = validationResult === "success";
@@ -2105,7 +2110,16 @@ function EditConnectionModal({ isOpen, connection, proxyPools, onSave, onClose }
           value={formData.priority}
           onChange={(e) => setFormData({ ...formData, priority: Number.parseInt(e.target.value) || 1 })}
         />
-
+        {isOAuth && connection.provider === "kiro" && (
+          <Input
+            label="Refresh Token"
+            type="password"
+            value={formData.refreshToken}
+            onChange={(e) => setFormData({ ...formData, refreshToken: e.target.value })}
+            placeholder="Enter new Kiro refresh token"
+            hint="Leave blank to keep the current refresh token."
+          />
+        )}
         {!isOAuth && (
           <>
             <div className="flex gap-2">
