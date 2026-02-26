@@ -6,10 +6,15 @@ import {
   getProviderNodes,
   getProxyPoolById,
 } from "@/models";
+import { withApiCache } from "@/lib/apiCache";
+import { API_CACHE_KEYS } from "@/lib/cacheKeys";
 import { APIKEY_PROVIDERS } from "@/shared/constants/config";
 import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider } from "@/shared/constants/providers";
 
-export const dynamic = "force-dynamic";
+const PROVIDERS_CACHE_TTL_MS = Math.max(
+  Number.parseInt(process.env.API_CACHE_PROVIDERS_TTL_MS || "2000", 10) || 0,
+  200
+);
 
 function normalizeProxyConfig(body = {}) {
   const enabled = body?.connectionProxyEnabled === true;
@@ -48,34 +53,38 @@ async function normalizeProxyPoolId(proxyPoolId) {
 // GET /api/providers - List all connections
 export async function GET() {
   try {
-    const connections = await getProviderConnections();
+    const payload = await withApiCache(API_CACHE_KEYS.providersList, PROVIDERS_CACHE_TTL_MS, async () => {
+      const connections = await getProviderConnections();
 
-    // Build nodeNameMap for compatible providers (id → name)
-    let nodeNameMap = {};
-    try {
-      const nodes = await getProviderNodes();
-      for (const node of nodes) {
-        if (node.id && node.name) nodeNameMap[node.id] = node.name;
-      }
-    } catch { }
+      // Build nodeNameMap for compatible providers (id → name)
+      let nodeNameMap = {};
+      try {
+        const nodes = await getProviderNodes();
+        for (const node of nodes) {
+          if (node.id && node.name) nodeNameMap[node.id] = node.name;
+        }
+      } catch {}
 
-    // Hide sensitive fields, enrich name for compatible providers
-    const safeConnections = connections.map(c => {
-      const isCompatible = isOpenAICompatibleProvider(c.provider) || isAnthropicCompatibleProvider(c.provider);
-      const name = isCompatible
-        ? (nodeNameMap[c.provider] || c.providerSpecificData?.nodeName || c.provider)
-        : c.name;
-      return {
-        ...c,
-        name,
-        apiKey: undefined,
-        accessToken: undefined,
-        refreshToken: undefined,
-        idToken: undefined,
-      };
+      // Hide sensitive fields, enrich name for compatible providers
+      const safeConnections = connections.map(c => {
+        const isCompatible = isOpenAICompatibleProvider(c.provider) || isAnthropicCompatibleProvider(c.provider);
+        const name = isCompatible
+          ? (nodeNameMap[c.provider] || c.providerSpecificData?.nodeName || c.provider)
+          : c.name;
+        return {
+          ...c,
+          name,
+          apiKey: undefined,
+          accessToken: undefined,
+          refreshToken: undefined,
+          idToken: undefined,
+        };
+      });
+
+      return { connections: safeConnections };
     });
 
-    return NextResponse.json({ connections: safeConnections });
+    return NextResponse.json(payload);
   } catch (error) {
     console.log("Error fetching providers:", error);
     return NextResponse.json({ error: "Failed to fetch providers" }, { status: 500 });
