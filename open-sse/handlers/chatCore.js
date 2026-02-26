@@ -45,8 +45,74 @@ function translateNonStreamingResponse(
   targetFormat,
   sourceFormat,
 ) {
-  // If already in source format (usually OpenAI), return as-is
-  if (targetFormat === sourceFormat || targetFormat === FORMATS.OPENAI) {
+  // Normalize provider-specific response shapes into OpenAI chat.completion format
+  if (targetFormat === FORMATS.OPENAI) {
+    if (Array.isArray(responseBody?.choices)) {
+      return responseBody;
+    }
+
+    // Ollama non-streaming format: { model, message: { role, content, tool_calls? }, done }
+    if (responseBody?.message && typeof responseBody.message === "object") {
+      const message = responseBody.message;
+      const rawToolCalls = Array.isArray(message.tool_calls)
+        ? message.tool_calls
+        : [];
+
+      const toolCalls = rawToolCalls
+        .map((tc, idx) => {
+          const fn = tc?.function || {};
+          const args = fn.arguments;
+          return {
+            id: tc?.id || `call_${Date.now()}_${idx}`,
+            type: "function",
+            function: {
+              name: fn.name || "unknown_tool",
+              arguments:
+                typeof args === "string"
+                  ? args
+                  : JSON.stringify(args || {}),
+            },
+          };
+        });
+
+      const usage =
+        typeof responseBody?.prompt_eval_count === "number" ||
+          typeof responseBody?.eval_count === "number"
+          ? {
+            prompt_tokens: responseBody.prompt_eval_count || 0,
+            completion_tokens: responseBody.eval_count || 0,
+            total_tokens:
+              (responseBody.prompt_eval_count || 0) +
+              (responseBody.eval_count || 0),
+          }
+          : undefined;
+
+      return {
+        id: `chatcmpl-${Date.now()}`,
+        object: "chat.completion",
+        created: Math.floor(Date.now() / 1000),
+        model: responseBody.model || "unknown",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content:
+                typeof message.content === "string" ? message.content : "",
+              ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+            },
+            finish_reason: toolCalls.length > 0 ? "tool_calls" : "stop",
+          },
+        ],
+        ...(usage ? { usage } : {}),
+      };
+    }
+
+    return responseBody;
+  }
+
+  // If already in source format, return as-is
+  if (targetFormat === sourceFormat) {
     return responseBody;
   }
 
@@ -1033,9 +1099,12 @@ export async function handleChatCore({
     }
 
     // Translate response to client's expected format (usually OpenAI)
-    const translatedResponse = needsTranslation(targetFormat, sourceFormat)
-      ? translateNonStreamingResponse(responseBody, targetFormat, sourceFormat)
-      : responseBody;
+    // Always run non-streaming normalization for OpenAI targets because some
+    // providers (e.g. Ollama) return non-OpenAI JSON shapes.
+    const translatedResponse =
+      needsTranslation(targetFormat, sourceFormat) || targetFormat === FORMATS.OPENAI
+        ? translateNonStreamingResponse(responseBody, targetFormat, sourceFormat)
+        : responseBody;
 
     if (sourceFormat !== FORMATS.CLAUDE) {
       // Ensure OpenAI-required fields are present (needed for Letta and other strict clients)
