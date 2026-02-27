@@ -80,7 +80,7 @@ export function getPlatformEnum() {
 export function getPlatformUserAgent() {
   const os = platform();
   const architecture = arch();
-  return `antigravity/1.104.0 ${os}/${architecture}`;
+  return ANTIGRAVITY_HEADERS['User-Agent'];
 }
 
 // Centralized client metadata (used in request bodies for loadCodeAssist, onboardUser, etc.)
@@ -95,11 +95,13 @@ export const CLIENT_METADATA = {
 export const INTERNAL_REQUEST_HEADER = { name: "x-request-source", value: "local" };
 
 // Antigravity headers (for chat/stream requests)
+const os = platform();
+const architecture = arch();
 export const ANTIGRAVITY_HEADERS = {
   "X-Client-Name": "antigravity",
   "X-Client-Version": "1.107.0",
-  "x-goog-api-client": "gl-node/18.18.2 fire/0.8.6 grpc/1.10.x",
-  "User-Agent": "antigravity/1.107.0 darwin/arm64"
+  "x-goog-api-client": "gl-node/22.20.0 auth/10.3.0 connectrpc/2.1.1",
+  "User-Agent": `antigravity/1.107.0 ${os}/${architecture}`// "antigravity/1.107.0 darwin/arm64"
 };
 
 // Cloud Code Assist API endpoints (for Project ID discovery)
