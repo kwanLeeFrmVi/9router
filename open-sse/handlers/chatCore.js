@@ -875,22 +875,20 @@ export async function handleChatCore({
               }
             };
           } else if (sourceFormat === FORMATS.CLAUDE) {
-            finalResponse = convertOpenAIToClaudeNonStreaming({
-              id: jsonResponse.id ? jsonResponse.id.replace(/^resp_/, "chatcmpl-") : `chatcmpl-${Date.now()}`,
-              object: "chat.completion",
-              created: jsonResponse.created_at || Math.floor(Date.now() / 1000),
+            // Convert OpenAI Responses API JSON → Claude Messages API non-streaming format
+            finalResponse = {
+              id: jsonResponse.id ? jsonResponse.id.replace(/^resp_/, "msg_") : `msg_${Date.now()}`,
+              type: "message",
+              role: "assistant",
+              content: [{ type: "text", text: textContent || "" }],
               model: model || "unknown",
-              choices: [{
-                index: 0,
-                message: { role: "assistant", content: textContent },
-                finish_reason: jsonResponse.status === "completed" ? "stop" : "stop"
-              }],
-              usage: usage ? {
-                prompt_tokens: usage.input_tokens || 0,
-                completion_tokens: usage.output_tokens || 0,
-                total_tokens: usage.total_tokens || 0
-              } : undefined
-            });
+              stop_reason: "end_turn",
+              stop_sequence: null,
+              usage: {
+                input_tokens: usage.input_tokens || 0,
+                output_tokens: usage.output_tokens || 0,
+              },
+            };
           } else {
             // OpenAI format
             finalResponse = {
