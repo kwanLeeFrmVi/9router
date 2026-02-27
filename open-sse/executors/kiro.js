@@ -1,7 +1,7 @@
 import { BaseExecutor } from "./base.js";
 import { PROVIDERS } from "../config/providers.js";
 import { v4 as uuidv4 } from "uuid";
-import { refreshKiroToken } from "../services/tokenRefresh.js";
+import { refreshKiroToken, refreshWithRetry } from "../services/tokenRefresh.js";
 import { proxyAwareFetch } from "../utils/proxyFetch.js";
 
 /**
@@ -362,10 +362,14 @@ export class KiroExecutor extends BaseExecutor {
     if (!credentials.refreshToken) return null;
 
     try {
-      // Use centralized refreshKiroToken function (handles both AWS SSO OIDC and Social Auth)
-      const result = await refreshKiroToken(
-        credentials.refreshToken,
-        credentials.providerSpecificData,
+      // Use centralized refreshKiroToken function with retry logic
+      const result = await refreshWithRetry(
+        () => refreshKiroToken(
+          credentials.refreshToken,
+          credentials.providerSpecificData,
+          log
+        ),
+        3,
         log
       );
 
