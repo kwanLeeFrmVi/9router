@@ -68,7 +68,24 @@ export default function ProviderDetailPage() {
     ? (providerNode?.prefix || providerId)
     : providerAlias;
   const activeConnection = connections.find((conn) => conn.isActive !== false) || null;
-  const allProviderModels = remoteModels.length > 0 ? remoteModels : models;
+  const allProviderModels = useMemo(() => {
+    const merged = new Map();
+
+    // Start with static models so they are always available.
+    for (const model of models) {
+      if (!model?.id) continue;
+      merged.set(model.id, model);
+    }
+
+    // Overlay with remote models (same id updates metadata/name),
+    // while preserving static-only models.
+    for (const model of remoteModels) {
+      if (!model?.id) continue;
+      merged.set(model.id, model);
+    }
+
+    return Array.from(merged.values());
+  }, [models, remoteModels]);
   const allProviderModelIds = useMemo(
     () => allProviderModels.map((model) => model.id),
     [allProviderModels]
