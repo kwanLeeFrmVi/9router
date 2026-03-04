@@ -1,1 +1,5 @@
-export { proxy, config } from "./dashboardGuard";
+export { proxy } from "./dashboardGuard";
+
+export const config = {
+  matcher: ["/", "/dashboard/:path*"],
+};
