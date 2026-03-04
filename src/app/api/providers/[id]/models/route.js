@@ -227,7 +227,15 @@ export async function GET(request, { params }) {
 
       let fetchedModels = [];
       try {
-        const url = `${baseUrl.replace(/\/$/, "")}/models`;
+        let normalizedBase = baseUrl.replace(/\/$/, "");
+        if (normalizedBase.endsWith("/chat/completions")) {
+          normalizedBase = normalizedBase.slice(0, -"/chat/completions".length);
+        } else if (normalizedBase.endsWith("/completions")) {
+          normalizedBase = normalizedBase.slice(0, -"/completions".length);
+        } else if (normalizedBase.endsWith("/responses")) {
+          normalizedBase = normalizedBase.slice(0, -"/responses".length);
+        }
+        const url = `${normalizedBase}/models`;
         const response = await fetch(url, {
           method: "GET",
           headers: {

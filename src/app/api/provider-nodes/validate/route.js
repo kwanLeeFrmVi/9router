@@ -17,13 +17,13 @@ export async function POST(request) {
       if (normalizedBase.endsWith("/messages")) {
         normalizedBase = normalizedBase.slice(0, -9); // remove /messages
       }
-      
+
       // Use /models endpoint for validation as many compatible providers support it (like OpenAI)
       const modelsUrl = `${normalizedBase}/models`;
-      
+
       const res = await fetch(modelsUrl, {
         method: "GET",
-        headers: { 
+        headers: {
           "x-api-key": apiKey,
           "anthropic-version": "2023-06-01",
           "Authorization": `Bearer ${apiKey}` // Add Bearer token for hybrid proxies
@@ -34,12 +34,38 @@ export async function POST(request) {
     }
 
     // OpenAI Compatible Validation (Default)
-    const modelsUrl = `${baseUrl.replace(/\/$/, "")}/models`;
-    const res = await fetch(modelsUrl, {
+    // Try /models first; fall back to chat/completions probe for providers
+    // that don't expose a /models endpoint (e.g. Vertex AI).
+    let normalizedBase = baseUrl.replace(/\/$/, "");
+    // Strip endpoint paths so probes work even if user pasted the full URL
+    if (normalizedBase.endsWith("/chat/completions")) {
+      normalizedBase = normalizedBase.slice(0, -"/chat/completions".length);
+    } else if (normalizedBase.endsWith("/completions")) {
+      normalizedBase = normalizedBase.slice(0, -"/completions".length);
+    } else if (normalizedBase.endsWith("/responses")) {
+      normalizedBase = normalizedBase.slice(0, -"/responses".length);
+    }
+    const modelsRes = await fetch(`${normalizedBase}/models`, {
       headers: { "Authorization": `Bearer ${apiKey}` },
     });
+    if (modelsRes.ok) {
+      return NextResponse.json({ valid: true, error: null });
+    }
 
-    return NextResponse.json({ valid: res.ok, error: res.ok ? null : "Invalid API key" });
+    const chatRes = await fetch(`${normalizedBase}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "ping",
+        max_tokens: 1,
+        messages: [{ role: "user", content: "test" }],
+      }),
+    });
+    const isValid = chatRes.status !== 401 && chatRes.status !== 403;
+    return NextResponse.json({ valid: isValid, error: isValid ? null : "Invalid API key" });
   } catch (error) {
     console.log("Error validating provider node:", error);
     return NextResponse.json({ error: "Validation failed" }, { status: 500 });

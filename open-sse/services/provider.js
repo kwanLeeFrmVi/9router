@@ -24,13 +24,24 @@ function getOpenAICompatibleType(provider) {
 }
 
 function buildOpenAICompatibleUrl(baseUrl, apiType) {
-  const normalized = baseUrl.replace(/\/$/, "");
+  let normalized = baseUrl.replace(/\/$/, "");
+  // Strip endpoint paths so we don't double-append them
+  if (normalized.endsWith("/chat/completions")) {
+    normalized = normalized.slice(0, -"/chat/completions".length);
+  } else if (normalized.endsWith("/completions")) {
+    normalized = normalized.slice(0, -"/completions".length);
+  } else if (normalized.endsWith("/responses")) {
+    normalized = normalized.slice(0, -"/responses".length);
+  }
   const path = apiType === "responses" ? "/responses" : "/chat/completions";
   return `${normalized}${path}`;
 }
 
 function buildAnthropicCompatibleUrl(baseUrl) {
-  const normalized = baseUrl.replace(/\/$/, "");
+  let normalized = baseUrl.replace(/\/$/, "");
+  if (normalized.endsWith("/messages")) {
+    normalized = normalized.slice(0, -"/messages".length);
+  }
   return `${normalized}/messages`;
 }
 
@@ -72,11 +83,11 @@ export function detectFormat(body) {
   // Claude requires content to be array with specific structure
   if (body.messages && Array.isArray(body.messages)) {
     const firstMsg = body.messages[0];
-    
+
     // If content is array, check if it follows Claude structure
     if (firstMsg?.content && Array.isArray(firstMsg.content)) {
       const firstContent = firstMsg.content[0];
-      
+
       // Claude format has specific types: text, image, tool_use, tool_result
       // OpenAI multimodal has: text, image_url (note the difference)
       if (firstContent?.type === "text" && !body.model?.includes("/")) {
@@ -86,23 +97,23 @@ export function detectFormat(body) {
           return "claude";
         }
         // Check if image format is Claude (source.type) vs OpenAI (image_url.url)
-        const hasClaudeImage = firstMsg.content.some(c => 
+        const hasClaudeImage = firstMsg.content.some(c =>
           c.type === "image" && c.source?.type === "base64"
         );
-        const hasOpenAIImage = firstMsg.content.some(c => 
+        const hasOpenAIImage = firstMsg.content.some(c =>
           c.type === "image_url" && c.image_url?.url
         );
         if (hasClaudeImage) return "claude";
         if (hasOpenAIImage) return "openai";
-        
+
         // If still unclear, check for tool format
-        const hasClaudeTool = firstMsg.content.some(c => 
+        const hasClaudeTool = firstMsg.content.some(c =>
           c.type === "tool_use" || c.type === "tool_result"
         );
         if (hasClaudeTool) return "claude";
       }
     }
-    
+
     // If content is string, it's likely OpenAI (Claude also supports this)
     // Check for other Claude-specific indicators
     if (body.system !== undefined || body.anthropic_version) {
@@ -223,13 +234,13 @@ export function buildProviderHeaders(provider, credentials, stream = true, body 
           headers["Authorization"] = `Bearer ${credentials.accessToken}`;
         }
         break;
-  
+
       case "antigravity":
       case "gemini-cli":
         // Antigravity and Gemini CLI use OAuth access token
         headers["Authorization"] = `Bearer ${credentials.accessToken}`;
         break;
-  
+
       case "claude":
         // Claude uses x-api-key header for API key, or Authorization for OAuth
         if (credentials.apiKey) {
@@ -238,7 +249,7 @@ export function buildProviderHeaders(provider, credentials, stream = true, body 
           headers["Authorization"] = `Bearer ${credentials.accessToken}`;
         }
         break;
-  
+
       case "github":
         // GitHub Copilot requires special headers to mimic VSCode
         // Prioritize copilotToken from providerSpecificData, fallback to accessToken
@@ -253,8 +264,8 @@ export function buildProviderHeaders(provider, credentials, stream = true, body 
         headers["openai-intent"] = "conversation-panel";
         headers["x-github-api-version"] = "2025-04-01";
         // Generate a UUID for x-request-id (Cloudflare Workers compatible)
-        headers["x-request-id"] = crypto.randomUUID ? crypto.randomUUID() : 
-          'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+        headers["x-request-id"] = crypto.randomUUID ? crypto.randomUUID() :
+          'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
             const r = Math.random() * 16 | 0;
             const v = c == 'x' ? r : (r & 0x3 | 0x8);
             return v.toString(16);
@@ -263,21 +274,21 @@ export function buildProviderHeaders(provider, credentials, stream = true, body 
         headers["X-Initiator"] = "user";
         headers["Accept"] = "application/json";
         break;
-  
+
       case "codex":
       case "qwen":
       case "openai":
       case "openrouter":
         headers["Authorization"] = `Bearer ${credentials.apiKey || credentials.accessToken}`;
         break;
-  
+
       case "glm":
       case "kimi":
       case "minimax":
         // Claude-compatible API providers use x-api-key
         headers["x-api-key"] = credentials.apiKey;
         break;
-  
+
       default:
         headers["Authorization"] = `Bearer ${credentials.apiKey || credentials.accessToken}`;
         break;

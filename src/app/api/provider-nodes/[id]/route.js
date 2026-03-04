@@ -30,11 +30,18 @@ export async function PUT(request, { params }) {
       return NextResponse.json({ error: "Base URL is required" }, { status: 400 });
     }
 
-    let sanitizedBaseUrl = baseUrl.trim();
-    
-    // Sanitize Base URL for Anthropic Compatible
-    if (node.type === "anthropic-compatible") {
-      sanitizedBaseUrl = sanitizedBaseUrl.replace(/\/$/, "");
+    let sanitizedBaseUrl = baseUrl.trim().replace(/\/$/, "");
+
+    // Sanitize Base URL based on node type
+    if (node.type === "openai-compatible") {
+      if (sanitizedBaseUrl.endsWith("/chat/completions")) {
+        sanitizedBaseUrl = sanitizedBaseUrl.slice(0, -"/chat/completions".length);
+      } else if (sanitizedBaseUrl.endsWith("/completions")) {
+        sanitizedBaseUrl = sanitizedBaseUrl.slice(0, -"/completions".length);
+      } else if (sanitizedBaseUrl.endsWith("/responses")) {
+        sanitizedBaseUrl = sanitizedBaseUrl.slice(0, -"/responses".length);
+      }
+    } else if (node.type === "anthropic-compatible") {
       if (sanitizedBaseUrl.endsWith("/messages")) {
         sanitizedBaseUrl = sanitizedBaseUrl.slice(0, -9); // remove /messages
       }
