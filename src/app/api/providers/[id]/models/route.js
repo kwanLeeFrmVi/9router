@@ -10,6 +10,7 @@ import { GEMINI_CONFIG } from "@/lib/oauth/constants/oauth";
 import { refreshGoogleToken, updateProviderCredentials } from "@/sse/services/tokenRefresh";
 
 const GEMINI_CLI_MODELS_URL = "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels";
+const KILOCODE_MODELS_URL = "https://api.kilo.ai/api/openrouter/models";
 const PROVIDER_MODELS_CACHE_TTL_MS = Math.max(
   Number.parseInt(process.env.API_CACHE_PROVIDER_MODELS_TTL_MS || "300000", 10) || 0,
   1000
@@ -341,6 +342,51 @@ export async function GET(request, { params }) {
       } catch (error) {
         console.log("Failed to fetch Kiro models dynamically, falling back to static:", error.message);
       }
+    }
+
+    if (connection.provider === "kilocode") {
+      const token = connection.accessToken || connection.apiKey;
+      if (!token) {
+        return NextResponse.json({ error: "No valid token found" }, { status: 401 });
+      }
+
+      const headers = {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`
+      };
+
+      const orgId = connection.providerSpecificData?.orgId;
+      if (orgId) {
+        headers["X-Kilocode-OrganizationID"] = orgId;
+      }
+
+      let fetchedModels = [];
+      let warning;
+
+      try {
+        const response = await fetch(KILOCODE_MODELS_URL, { method: "GET", headers });
+        if (response.ok) {
+          const data = await response.json();
+          fetchedModels = parseOpenAIStyleModels(data);
+        } else {
+          const errorText = await response.text();
+          warning = `Failed to fetch Kilo Code models: ${response.status} ${errorText}`;
+          console.log("Failed to fetch Kilo Code models dynamically, falling back to static:", errorText);
+        }
+      } catch (error) {
+        warning = `Failed to fetch Kilo Code models: ${error.message}`;
+        console.log("Failed to fetch Kilo Code models dynamically, falling back to static:", error.message);
+      }
+
+      const models = mergeStaticAndFetchedModels(connection.provider, fetchedModels);
+      const payload = {
+        provider: connection.provider,
+        connectionId: connection.id,
+        models,
+        ...(warning ? { warning } : {})
+      };
+      await setCachedValue(cacheKey, payload, PROVIDER_MODELS_CACHE_TTL_MS);
+      return NextResponse.json(payload);
     }
 
     if (connection.provider === "gemini-cli") {
