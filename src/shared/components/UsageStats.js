@@ -211,13 +211,15 @@ export default function UsageStats() {
   const sortOrder = searchParams.get("sortOrder") || "asc";
 
   const [stats, setStats] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [fetching, setFetching] = useState(false);
+  const [fetchState, setFetchState] = useState("initial-loading");
   const [tableView, setTableView] = useState("model");
   const [providers, setProviders] = useState([]);
   const [period, setPeriod] = useState("7d");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
+
+  const loading = fetchState === "initial-loading";
+  const fetching = fetchState === "refreshing";
 
   // Fetch connected providers once, deduplicate by provider type
   useEffect(() => {
@@ -236,23 +238,35 @@ export default function UsageStats() {
       .catch(() => { });
   }, []);
 
+  const handlePeriodChange = useCallback((value) => {
+    if (value === period) return;
+    setFetchState(stats ? "refreshing" : "initial-loading");
+    setPeriod(value);
+  }, [period, stats]);
+
   // Fetch filtered stats via REST when period changes
   useEffect(() => {
-    // First load: show full spinner; subsequent: show subtle fetching indicator
-    if (!stats) setLoading(true);
-    else setFetching(true);
+    let isCurrent = true;
+    const controller = new AbortController();
 
-    fetch(`/api/usage/stats?period=${period}`)
+    fetch(`/api/usage/stats?period=${period}`, { signal: controller.signal })
       .then((r) => r.ok ? r.json() : null)
       .then((data) => {
-        if (data) setStats((prev) => ({ ...prev, ...data }));
+        if (data && isCurrent) {
+          setStats((prev) => ({ ...prev, ...data }));
+        }
       })
       .catch(() => { })
       .finally(() => {
-        setLoading(false);
-        setFetching(false);
+        if (!isCurrent) return;
+        setFetchState("idle");
       });
-  }, [period]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    return () => {
+      isCurrent = false;
+      controller.abort();
+    };
+  }, [period]);
 
   // SSE connection - real-time updates for activeRequests + recentRequests only
   useEffect(() => {
@@ -269,13 +283,13 @@ export default function UsageStats() {
           errorProvider: data.errorProvider,
           pending: data.pending,
         } : data);
-        setLoading(false);
+        setFetchState((prev) => prev === "initial-loading" ? "idle" : prev);
       } catch (err) {
         console.error("[SSE CLIENT] parse error:", err);
       }
     };
 
-    es.onerror = () => setLoading(false);
+    es.onerror = () => setFetchState((prev) => prev === "initial-loading" ? "idle" : prev);
 
     return () => es.close();
   }, []);
@@ -444,7 +458,7 @@ export default function UsageStats() {
           {PERIODS.map((p) => (
             <button
               key={p.value}
-              onClick={() => setPeriod(p.value)}
+              onClick={() => handlePeriodChange(p.value)}
               disabled={fetching}
               className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${period === p.value ? "bg-primary text-white shadow-sm" : "text-text-muted hover:text-text hover:bg-bg-hover"}`}
             >
