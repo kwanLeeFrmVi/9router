@@ -412,6 +412,15 @@ export const PROVIDERS = {
   chutes: {
     baseUrl: "https://llm.chutes.ai/v1/chat/completions",
     format: "openai"
+  },
+  vertex: {
+    // Dynamic URL built by VertexExecutor: https://{region}-aiplatform.googleapis.com/v1/projects/{project}/locations/{region}/publishers/google/models
+    format: "gemini",
+  },
+  "vertex-partner": {
+    // OpenAI-compatible global endpoint for partner models (Llama, Mistral, GLM-5, etc.)
+    // Anthropic Claude on Vertex uses a rawPredict endpoint (handled inside VertexExecutor.buildUrl)
+    format: "openai",
   }
 };
 

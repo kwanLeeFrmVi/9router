@@ -46,8 +46,6 @@ data/
 logs/*
 source/*
 .cursor/*
-docs/*
-!docs/ARCHITECTURE.md
 test/*
 bin/*
 open-sse/test/*

@@ -107,6 +107,24 @@ export async function POST(request) {
         baseUrl: node.baseUrl,
         nodeName: node.name,
       };
+    } else if (provider === "vertex" || provider === "vertex-partner") {
+      // Vertex AI: apiKey is the SA JSON blob, region is required
+      // vertex-partner also accepts optional modelFamily: "openai" (default) | "anthropic"
+      const { region, modelFamily } = body;
+      let saJson;
+      try { saJson = JSON.parse(apiKey); } catch {
+        return NextResponse.json({ error: "Invalid JSON. Paste the entire service account JSON key file." }, { status: 400 });
+      }
+      if (!saJson.client_email || !saJson.private_key || !saJson.project_id) {
+        return NextResponse.json({ error: "Service account JSON missing required fields: client_email, private_key, or project_id" }, { status: 400 });
+      }
+      if (!region) {
+        return NextResponse.json({ error: "Region is required for Vertex AI (e.g. us-central1)" }, { status: 400 });
+      }
+      providerSpecificData = {
+        region,
+        ...(provider === "vertex-partner" ? { modelFamily: modelFamily || "openai" } : {}),
+      };
     }
 
     const newConnection = await createProviderConnection({

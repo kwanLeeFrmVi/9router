@@ -308,6 +308,75 @@ export async function GET(request, { params }) {
       return NextResponse.json(payload);
     }
 
+    // Vertex AI: Use GoogleAuth to list models from Vertex AI API
+    if (connection.provider === "vertex" || connection.provider === "vertex-partner") {
+      const saJson = (() => {
+        try { return JSON.parse(connection.apiKey); } catch { return null; }
+      })();
+
+      if (!saJson || !saJson.client_email || !saJson.private_key || !saJson.project_id) {
+        return NextResponse.json({ error: "Invalid service account JSON" }, { status: 400 });
+      }
+
+      const region = connection.providerSpecificData?.region || "us-central1";
+      let fetchedModels = [];
+      let warning;
+
+      try {
+        const { GoogleAuth } = await import("google-auth-library");
+        const auth = new GoogleAuth({
+          credentials: {
+            client_email: saJson.client_email,
+            private_key: saJson.private_key,
+            project_id: saJson.project_id,
+          },
+          scopes: ["https://www.googleapis.com/auth/cloud-platform"],
+        });
+        const client = await auth.getClient();
+        const tokenResponse = await client.getAccessToken();
+        const token = tokenResponse?.token || tokenResponse;
+
+        const url = `https://${region}-aiplatform.googleapis.com/v1/projects/${saJson.project_id}/locations/${region}/publishers/google/models`;
+        const response = await fetch(url, {
+          method: "GET",
+          headers: {
+            "Authorization": `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          // Vertex returns { publisherModels: [...] } with name like "publishers/google/models/gemini-2.5-pro"
+          const rawModels = data.publisherModels || data.models || [];
+          fetchedModels = rawModels
+            .map((m) => {
+              const fullName = m.name || "";
+              const id = fullName.split("/").pop() || fullName;
+              return { id, name: m.displayName || m.name || id };
+            })
+            .filter((m) => m.id);
+        } else {
+          const errorText = await response.text();
+          warning = `Failed to fetch Vertex AI models: ${response.status} ${errorText}`;
+          console.log("Failed to fetch Vertex AI models dynamically, falling back to static:", errorText);
+        }
+      } catch (error) {
+        warning = `Failed to fetch Vertex AI models: ${error.message}`;
+        console.log("Failed to fetch Vertex AI models dynamically, falling back to static:", error.message);
+      }
+
+      const models = mergeStaticAndFetchedModels(connection.provider, fetchedModels);
+      const payload = {
+        provider: connection.provider,
+        connectionId: connection.id,
+        models,
+        ...(warning ? { warning } : {}),
+      };
+      await setCachedValue(cacheKey, payload, PROVIDER_MODELS_CACHE_TTL_MS);
+      return NextResponse.json(payload);
+    }
+
     // Kiro: Try dynamic model fetching first
     if (connection.provider === "kiro") {
       try {
