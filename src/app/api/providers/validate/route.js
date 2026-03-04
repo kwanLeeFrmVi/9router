@@ -23,11 +23,33 @@ export async function POST(request) {
         if (!node) {
           return NextResponse.json({ error: "OpenAI Compatible node not found" }, { status: 404 });
         }
-        const modelsUrl = `${node.baseUrl?.replace(/\/$/, "")}/models`;
-        const res = await fetch(modelsUrl, {
+        const baseUrl = node.baseUrl?.replace(/\/$/, "");
+
+        // Try /models first; if the endpoint doesn't exist, fall back to
+        // a lightweight chat/completions probe so providers without a
+        // /models route (e.g. Vertex AI) can still be validated.
+        const modelsRes = await fetch(`${baseUrl}/models`, {
           headers: { "Authorization": `Bearer ${apiKey}` },
         });
-        isValid = res.ok;
+        if (modelsRes.ok) {
+          return NextResponse.json({ valid: true, error: null });
+        }
+
+        // /models failed — try chat/completions with an intentionally
+        // tiny request. Any non-401/403 response means the key is valid.
+        const chatRes = await fetch(`${baseUrl}/chat/completions`, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "ping",
+            max_tokens: 1,
+            messages: [{ role: "user", content: "test" }],
+          }),
+        });
+        isValid = chatRes.status !== 401 && chatRes.status !== 403;
         return NextResponse.json({
           valid: isValid,
           error: isValid ? null : "Invalid API key",

@@ -244,26 +244,29 @@ export async function GET(request, { params }) {
       if (!baseUrl) {
         return NextResponse.json({ error: "No base URL configured for OpenAI compatible provider" }, { status: 400 });
       }
-      const url = `${baseUrl.replace(/\/$/, "")}/models`;
-      const response = await fetch(url, {
-        method: "GET",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${connection.apiKey}`,
-        },
-      });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.log(`Error fetching models from ${connection.provider}:`, errorText);
-        return NextResponse.json(
-          { error: `Failed to fetch models: ${response.status}` },
-          { status: response.status }
-        );
+      let fetchedModels = [];
+      try {
+        const url = `${baseUrl.replace(/\/$/, "")}/models`;
+        const response = await fetch(url, {
+          method: "GET",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${connection.apiKey}`,
+          },
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          fetchedModels = data.data || data.models || [];
+        } else {
+          console.log(`OpenAI-compatible /models not available for ${connection.provider} (${response.status}), returning empty list`);
+        }
+      } catch (err) {
+        console.log(`Failed to fetch /models for ${connection.provider}:`, err.message);
       }
 
-      const data = await response.json();
-      const models = mergeStaticAndFetchedModels(connection.provider, data.data || data.models || []);
+      const models = mergeStaticAndFetchedModels(connection.provider, fetchedModels);
 
       const payload = {
         provider: connection.provider,
