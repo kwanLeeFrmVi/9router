@@ -1,6 +1,6 @@
 import { PROVIDER_MODELS, PROVIDER_ID_TO_ALIAS } from "@/shared/constants/models";
-import { getProviderAlias } from "@/shared/constants/providers";
-import { getProviderConnections, getCombos } from "@/lib/localDb";
+import { getProviderAlias, isOpenAICompatibleProvider, isAnthropicCompatibleProvider } from "@/shared/constants/providers";
+import { getProviderConnections, getCombos, getModelAliases } from "@/lib/localDb";
 
 /**
  * Handle CORS preflight
@@ -82,6 +82,14 @@ export async function GET() {
         }
       }
     } else {
+      // Fetch model aliases to include alias-based models (used by compatible providers)
+      let modelAliases = {};
+      try {
+        modelAliases = await getModelAliases();
+      } catch (e) {
+        console.log("Could not fetch model aliases");
+      }
+
       for (const [providerId, conn] of activeConnectionByProvider.entries()) {
         const staticAlias = PROVIDER_ID_TO_ALIAS[providerId] || providerId;
         const outputAlias = getProviderAlias(providerId) || staticAlias;
@@ -89,6 +97,32 @@ export async function GET() {
         const enabledModels = conn?.providerSpecificData?.enabledModels;
         const hasExplicitEnabledModels =
           Array.isArray(enabledModels) && enabledModels.length > 0;
+
+        const isCompatible = isOpenAICompatibleProvider(providerId) || isAnthropicCompatibleProvider(providerId);
+
+        // For compatible providers, models are stored as aliases (alias → providerId/modelId).
+        // Extract model IDs from aliases that belong to this provider.
+        if (isCompatible && !hasExplicitEnabledModels) {
+          const prefix = `${providerId}/`;
+          const aliasModelIds = Object.values(modelAliases)
+            .filter((fullModel) => typeof fullModel === "string" && fullModel.startsWith(prefix))
+            .map((fullModel) => fullModel.slice(prefix.length))
+            .filter((modelId) => modelId.trim() !== "");
+
+          const uniqueModelIds = Array.from(new Set(aliasModelIds));
+          for (const modelId of uniqueModelIds) {
+            models.push({
+              id: `${outputAlias}/${modelId}`,
+              object: "model",
+              created: timestamp,
+              owned_by: outputAlias,
+              permission: [],
+              root: modelId,
+              parent: null,
+            });
+          }
+          continue;
+        }
 
         // Default: if no explicit selection, all static models are active.
         // If explicit selection exists, expose exactly those model IDs (including non-static IDs).
