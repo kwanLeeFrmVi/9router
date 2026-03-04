@@ -55,12 +55,24 @@ export async function POST(request) {
         return NextResponse.json({ error: "Invalid OpenAI compatible API type" }, { status: 400 });
       }
 
+      // Sanitize Base URL: remove trailing slash, and remove trailing
+      // /chat/completions, /completions, or /responses if user pasted the
+      // full endpoint URL. This prevents double-appending at runtime.
+      let sanitizedBaseUrl = (baseUrl || OPENAI_COMPATIBLE_DEFAULTS.baseUrl).trim().replace(/\/$/, "");
+      if (sanitizedBaseUrl.endsWith("/chat/completions")) {
+        sanitizedBaseUrl = sanitizedBaseUrl.slice(0, -"/chat/completions".length);
+      } else if (sanitizedBaseUrl.endsWith("/completions")) {
+        sanitizedBaseUrl = sanitizedBaseUrl.slice(0, -"/completions".length);
+      } else if (sanitizedBaseUrl.endsWith("/responses")) {
+        sanitizedBaseUrl = sanitizedBaseUrl.slice(0, -"/responses".length);
+      }
+
       const node = await createProviderNode({
         id: `${OPENAI_COMPATIBLE_PREFIX}${apiType}-${generateId()}`,
         type: "openai-compatible",
         prefix: prefix.trim(),
         apiType,
-        baseUrl: (baseUrl || OPENAI_COMPATIBLE_DEFAULTS.baseUrl).trim(),
+        baseUrl: sanitizedBaseUrl,
         name: name.trim(),
       });
       return NextResponse.json({ node }, { status: 201 });

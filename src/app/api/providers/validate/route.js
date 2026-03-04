@@ -23,7 +23,15 @@ export async function POST(request) {
         if (!node) {
           return NextResponse.json({ error: "OpenAI Compatible node not found" }, { status: 404 });
         }
-        const baseUrl = node.baseUrl?.replace(/\/$/, "");
+        let baseUrl = node.baseUrl?.replace(/\/$/, "");
+        // Strip endpoint paths so probes work even if the stored URL includes them
+        if (baseUrl.endsWith("/chat/completions")) {
+          baseUrl = baseUrl.slice(0, -"/chat/completions".length);
+        } else if (baseUrl.endsWith("/completions")) {
+          baseUrl = baseUrl.slice(0, -"/completions".length);
+        } else if (baseUrl.endsWith("/responses")) {
+          baseUrl = baseUrl.slice(0, -"/responses".length);
+        }
 
         // Try /models first; if the endpoint doesn't exist, fall back to
         // a lightweight chat/completions probe so providers without a

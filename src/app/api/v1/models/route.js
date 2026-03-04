@@ -99,6 +99,9 @@ export async function GET() {
           Array.isArray(enabledModels) && enabledModels.length > 0;
 
         const isCompatible = isOpenAICompatibleProvider(providerId) || isAnthropicCompatibleProvider(providerId);
+        const compatibleAlias = isCompatible
+          ? (conn.providerSpecificData?.prefix || outputAlias)
+          : outputAlias;
 
         // For compatible providers, models are stored as aliases (alias → providerId/modelId).
         // Extract model IDs from aliases that belong to this provider.
@@ -112,10 +115,10 @@ export async function GET() {
           const uniqueModelIds = Array.from(new Set(aliasModelIds));
           for (const modelId of uniqueModelIds) {
             models.push({
-              id: `${outputAlias}/${modelId}`,
+              id: `${compatibleAlias}/${modelId}`,
               object: "model",
               created: timestamp,
-              owned_by: outputAlias,
+              owned_by: compatibleAlias,
               permission: [],
               root: modelId,
               parent: null,

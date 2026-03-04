@@ -308,11 +308,37 @@ async function testApiKeyConnection(connection, effectiveProxy = null) {
   if (isOpenAICompatibleProvider(connection.provider)) {
     const modelsBase = connection.providerSpecificData?.baseUrl;
     if (!modelsBase) return { valid: false, error: "Missing base URL" };
+    let baseUrl = modelsBase.replace(/\/$/, "");
+    // Strip endpoint paths so probes work even if the stored URL includes them
+    if (baseUrl.endsWith("/chat/completions")) {
+      baseUrl = baseUrl.slice(0, -"/chat/completions".length);
+    } else if (baseUrl.endsWith("/completions")) {
+      baseUrl = baseUrl.slice(0, -"/completions".length);
+    } else if (baseUrl.endsWith("/responses")) {
+      baseUrl = baseUrl.slice(0, -"/responses".length);
+    }
     try {
-      const res = await fetchWithConnectionProxy(`${modelsBase.replace(/\/$/, "")}/models`, {
+      // Try /models first; fall back to chat/completions probe for providers
+      // that don't expose a /models endpoint (e.g. Vertex AI).
+      const modelsRes = await fetchWithConnectionProxy(`${baseUrl}/models`, {
         headers: { "Authorization": `Bearer ${connection.apiKey}` },
       }, effectiveProxy);
-      return { valid: res.ok, error: res.ok ? null : "Invalid API key or base URL" };
+      if (modelsRes.ok) return { valid: true, error: null };
+
+      const chatRes = await fetchWithConnectionProxy(`${baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${connection.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "ping",
+          max_tokens: 1,
+          messages: [{ role: "user", content: "test" }],
+        }),
+      }, effectiveProxy);
+      const valid = chatRes.status !== 401 && chatRes.status !== 403;
+      return { valid, error: valid ? null : "Invalid API key or base URL" };
     } catch (err) {
       return { valid: false, error: err.message };
     }
