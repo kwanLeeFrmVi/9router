@@ -49,6 +49,8 @@ export const PROVIDER_ENDPOINTS = {
   gemini: "https://generativelanguage.googleapis.com/v1beta/models",
   ollama: "https://ollama.com/api/chat",
   "ollama-local": "http://localhost:11434/api/chat",
+  vertex: "https://{region}-aiplatform.googleapis.com/v1/publishers/google/models",
+  "vertex-partner": "https://aiplatform.googleapis.com/v1/projects/{project}/locations/global/endpoints/openapi",
 };
 
 // Re-export from providers.js for backward compatibility

@@ -321,6 +321,26 @@ export const PROVIDER_MODELS = {
     { id: "glm-4.7-flash", name: "GLM 4.7 Flash" },
     { id: "qwen3.5", name: "Qwen3.5" },
   ],
+  vertex: [
+    { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro" },
+    { id: "gemini-2.5-flash", name: "Gemini 2.5 Flash" },
+    { id: "gemini-2.0-flash", name: "Gemini 2.0 Flash" },
+    { id: "gemini-2.0-flash-lite", name: "Gemini 2.0 Flash Lite" },
+  ],
+  "vertex-partner": [
+    // Anthropic Claude (modelFamily: "anthropic")
+    { id: "claude-opus-4@20250514", name: "Claude Opus 4 (Vertex)" },
+    { id: "claude-sonnet-4@20250514", name: "Claude Sonnet 4 (Vertex)" },
+    { id: "claude-3-5-sonnet@20241022", name: "Claude 3.5 Sonnet (Vertex)" },
+    // Meta Llama (modelFamily: "openai")
+    { id: "meta/llama-4-maverick-17b-128e-instruct-maas", name: "Llama 4 Maverick (Vertex)" },
+    { id: "meta/llama-3.3-70b-instruct-maas", name: "Llama 3.3 70B (Vertex)" },
+    // Mistral (modelFamily: "openai")
+    { id: "mistral-large@2411", name: "Mistral Large (Vertex)" },
+    { id: "mistral-nemo@2407", name: "Mistral Nemo (Vertex)" },
+    // Zhipu GLM (modelFamily: "openai")
+    { id: "zai-org/glm-5-maas", name: "GLM-5 (Vertex)" },
+  ],
 };
 
 // Helper functions
@@ -372,6 +392,33 @@ const OAUTH_ALIASES = {
   "kimi-coding": "kmc",
   kilocode: "kc",
   cline: "cl",
+  openai: "openai",
+  anthropic: "anthropic",
+  gemini: "gemini",
+  openrouter: "openrouter",
+  glm: "glm",
+  "glm-cn": "glm-cn",
+  kimi: "kimi",
+  minimax: "minimax",
+  "minimax-cn": "minimax-cn",
+  alicode: "alicode",
+  "alicode-intl": "alicode-intl",
+  deepseek: "deepseek",
+  groq: "groq",
+  xai: "xai",
+  mistral: "mistral",
+  perplexity: "perplexity",
+  together: "together",
+  fireworks: "fireworks",
+  cerebras: "cerebras",
+  cohere: "cohere",
+  nvidia: "nvidia",
+  nebius: "nebius",
+  siliconflow: "siliconflow",
+  hyperbolic: "hyperbolic",
+  ollama: "ollama",
+  vertex: "vertex",
+  "vertex-partner": "vertex-partner",
 };
 
 // Derived from PROVIDERS — no need to maintain manually

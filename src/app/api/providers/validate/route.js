@@ -234,6 +234,31 @@ export async function POST(request) {
           break;
         }
 
+        case "vertex":
+        case "vertex-partner": {
+          // apiKey is the entire SA JSON blob
+          let saJson;
+          try { saJson = JSON.parse(apiKey); } catch {
+            return NextResponse.json({ valid: false, error: "Invalid JSON. Paste the entire service account JSON key file." });
+          }
+          if (!saJson.client_email || !saJson.private_key || !saJson.project_id) {
+            return NextResponse.json({ valid: false, error: "Missing required fields: client_email, private_key, or project_id" });
+          }
+          const { GoogleAuth } = await import("google-auth-library");
+          const auth = new GoogleAuth({
+            credentials: {
+              client_email: saJson.client_email,
+              private_key: saJson.private_key,
+              project_id: saJson.project_id,
+            },
+            scopes: ["https://www.googleapis.com/auth/cloud-platform"],
+          });
+          const client = await auth.getClient();
+          const tokenResponse = await client.getAccessToken();
+          isValid = !!(tokenResponse?.token || tokenResponse);
+          break;
+        }
+
         default:
           return NextResponse.json({ error: "Provider validation not supported" }, { status: 400 });
       }

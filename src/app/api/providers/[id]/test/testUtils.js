@@ -511,6 +511,30 @@ async function testApiKeyConnection(connection, effectiveProxy = null) {
         const res = await fetchWithConnectionProxy("https://llm.chutes.ai/v1/models", { headers: { Authorization: `Bearer ${connection.apiKey}` } }, effectiveProxy);
         return { valid: res.ok, error: res.ok ? null : "Invalid API key" };
       }
+      case "vertex":
+      case "vertex-partner": {
+        // apiKey contains the entire SA JSON blob
+        let saJson;
+        try { saJson = JSON.parse(connection.apiKey); } catch {
+          return { valid: false, error: "Invalid JSON in API key field" };
+        }
+        if (!saJson.client_email || !saJson.private_key || !saJson.project_id) {
+          return { valid: false, error: "Missing client_email, private_key, or project_id" };
+        }
+        const { GoogleAuth } = await import("google-auth-library");
+        const auth = new GoogleAuth({
+          credentials: {
+            client_email: saJson.client_email,
+            private_key: saJson.private_key,
+            project_id: saJson.project_id,
+          },
+          scopes: ["https://www.googleapis.com/auth/cloud-platform"],
+        });
+        const client = await auth.getClient();
+        const tokenResponse = await client.getAccessToken();
+        const valid = !!(tokenResponse?.token || tokenResponse);
+        return { valid, error: valid ? null : "Failed to obtain access token from service account" };
+      }
       default:
         return { valid: false, error: "Provider test not supported" };
     }

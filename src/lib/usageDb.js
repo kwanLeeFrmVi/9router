@@ -366,18 +366,18 @@ export async function getRecentLogs(options = {}) {
   if (isCloud || !fs || !LOG_FILE || !fs.existsSync(LOG_FILE)) return { logs: [], total: 0 };
   try {
     let lines = fs.readFileSync(LOG_FILE, "utf-8").trim().split("\n").filter(l => l);
-    
+
     // Reverse so newest is first
     lines.reverse();
-    
+
     if (search) {
       lines = lines.filter(line => line.toLowerCase().includes(search));
     }
-    
+
     const total = lines.length;
     const startIndex = (page - 1) * limit;
     const paginatedLogs = lines.slice(startIndex, startIndex + limit);
-    
+
     return { logs: paginatedLogs, total };
   } catch { return { logs: [], total: 0 }; }
 }
@@ -522,13 +522,7 @@ function calculateCostSync(provider, model, tokens, pricingMap) {
  */
 export async function getUsageStats(period = "all") {
   const db = await getUsageDb();
-  let history = db.data.history || [];
-
-  // Filter history by period
-  if (period && PERIOD_MS[period]) {
-    const cutoff = Date.now() - PERIOD_MS[period];
-    history = history.filter((e) => new Date(e.timestamp).getTime() >= cutoff);
-  }
+  const sinceTs = PERIOD_MS[period] ? Date.now() - PERIOD_MS[period] : null;
 
   // Import localDb to get provider connection names, API keys, pricing, and provider nodes
   const { getProviderConnections, getApiKeys, getPricing, getProviderNodes } = await import("@/lib/localDb.js");
@@ -579,33 +573,53 @@ export async function getUsageStats(period = "all") {
   }
 
   // Fetch recent 20 requests
-  stats.recentRequests = db.prepare(`SELECT * FROM usage ORDER BY timestamp DESC LIMIT 20`).all().map(e => ({
+  const recentQuery = sinceTs
+    ? `SELECT * FROM usage WHERE timestamp >= ? ORDER BY timestamp DESC LIMIT 20`
+    : `SELECT * FROM usage ORDER BY timestamp DESC LIMIT 20`;
+  stats.recentRequests = (sinceTs
+    ? db.prepare(recentQuery).all(sinceTs)
+    : db.prepare(recentQuery).all()
+  ).map(e => ({
     timestamp: new Date(e.timestamp).toISOString(),
     model: e.model, provider: e.provider || "",
     promptTokens: e.prompt_tokens, completionTokens: e.completion_tokens, status: e.status || "ok"
   }));
 
   // Totals
-  const totalRow = db.prepare(`SELECT COUNT(*) as calls, SUM(prompt_tokens) as p, SUM(completion_tokens) as c, SUM(cost) as cost FROM usage`).get();
+  const totalQuery = sinceTs
+    ? `SELECT COUNT(*) as calls, SUM(prompt_tokens) as p, SUM(completion_tokens) as c, SUM(cost) as cost FROM usage WHERE timestamp >= ?`
+    : `SELECT COUNT(*) as calls, SUM(prompt_tokens) as p, SUM(completion_tokens) as c, SUM(cost) as cost FROM usage`;
+  const totalRow = sinceTs
+    ? db.prepare(totalQuery).get(sinceTs)
+    : db.prepare(totalQuery).get();
   stats.totalRequests = totalRow?.calls || 0;
   stats.totalPromptTokens = totalRow?.p || 0;
   stats.totalCompletionTokens = totalRow?.c || 0;
   stats.totalCost = totalRow?.cost || 0;
 
   // By Provider
-  db.prepare(`SELECT provider, COUNT(*) as calls, SUM(prompt_tokens) as p, SUM(completion_tokens) as c, SUM(cost) as cost FROM usage GROUP BY provider`).all().forEach(row => {
+  const providerQuery = sinceTs
+    ? `SELECT provider, COUNT(*) as calls, SUM(prompt_tokens) as p, SUM(completion_tokens) as c, SUM(cost) as cost FROM usage WHERE timestamp >= ? GROUP BY provider`
+    : `SELECT provider, COUNT(*) as calls, SUM(prompt_tokens) as p, SUM(completion_tokens) as c, SUM(cost) as cost FROM usage GROUP BY provider`;
+  (sinceTs ? db.prepare(providerQuery).all(sinceTs) : db.prepare(providerQuery).all()).forEach(row => {
     if (row.provider) stats.byProvider[row.provider] = { requests: row.calls, promptTokens: row.p, completionTokens: row.c, cost: row.cost };
   });
 
   // By Model
-  db.prepare(`SELECT model, provider, MAX(timestamp) as ts, COUNT(*) as calls, SUM(prompt_tokens) as p, SUM(completion_tokens) as c, SUM(cost) as cost FROM usage GROUP BY model, provider`).all().forEach(row => {
+  const modelQuery = sinceTs
+    ? `SELECT model, provider, MAX(timestamp) as ts, COUNT(*) as calls, SUM(prompt_tokens) as p, SUM(completion_tokens) as c, SUM(cost) as cost FROM usage WHERE timestamp >= ? GROUP BY model, provider`
+    : `SELECT model, provider, MAX(timestamp) as ts, COUNT(*) as calls, SUM(prompt_tokens) as p, SUM(completion_tokens) as c, SUM(cost) as cost FROM usage GROUP BY model, provider`;
+  (sinceTs ? db.prepare(modelQuery).all(sinceTs) : db.prepare(modelQuery).all()).forEach(row => {
     const key = row.provider ? `${row.model} (${row.provider})` : row.model;
     const providerDisplayName = providerNodeNameMap[row.provider] || row.provider;
     stats.byModel[key] = { requests: row.calls, promptTokens: row.p, completionTokens: row.c, cost: row.cost, rawModel: row.model, provider: providerDisplayName, lastUsed: new Date(row.ts).toISOString() };
   });
 
   // By Account
-  db.prepare(`SELECT connection_id, model, provider, MAX(timestamp) as ts, COUNT(*) as calls, SUM(prompt_tokens) as p, SUM(completion_tokens) as c, SUM(cost) as cost FROM usage WHERE connection_id IS NOT NULL GROUP BY connection_id, model, provider`).all().forEach(row => {
+  const accountQuery = sinceTs
+    ? `SELECT connection_id, model, provider, MAX(timestamp) as ts, COUNT(*) as calls, SUM(prompt_tokens) as p, SUM(completion_tokens) as c, SUM(cost) as cost FROM usage WHERE connection_id IS NOT NULL AND timestamp >= ? GROUP BY connection_id, model, provider`
+    : `SELECT connection_id, model, provider, MAX(timestamp) as ts, COUNT(*) as calls, SUM(prompt_tokens) as p, SUM(completion_tokens) as c, SUM(cost) as cost FROM usage WHERE connection_id IS NOT NULL GROUP BY connection_id, model, provider`;
+  (sinceTs ? db.prepare(accountQuery).all(sinceTs) : db.prepare(accountQuery).all()).forEach(row => {
     const accountName = connectionMap[row.connection_id] || `Account ${row.connection_id.slice(0, 8)}...`;
     const key = `${row.model} (${row.provider} - ${accountName})`;
     const providerDisplayName = providerNodeNameMap[row.provider] || row.provider;
@@ -613,7 +627,10 @@ export async function getUsageStats(period = "all") {
   });
 
   // By API Key
-  db.prepare(`SELECT api_key, model, provider, MAX(timestamp) as ts, COUNT(*) as calls, SUM(prompt_tokens) as p, SUM(completion_tokens) as c, SUM(cost) as cost FROM usage GROUP BY api_key, model, provider`).all().forEach(row => {
+  const apiKeyQuery = sinceTs
+    ? `SELECT api_key, model, provider, MAX(timestamp) as ts, COUNT(*) as calls, SUM(prompt_tokens) as p, SUM(completion_tokens) as c, SUM(cost) as cost FROM usage WHERE timestamp >= ? GROUP BY api_key, model, provider`
+    : `SELECT api_key, model, provider, MAX(timestamp) as ts, COUNT(*) as calls, SUM(prompt_tokens) as p, SUM(completion_tokens) as c, SUM(cost) as cost FROM usage GROUP BY api_key, model, provider`;
+  (sinceTs ? db.prepare(apiKeyQuery).all(sinceTs) : db.prepare(apiKeyQuery).all()).forEach(row => {
     const providerDisplayName = providerNodeNameMap[row.provider] || row.provider;
     if (row.api_key) {
       const keyName = apiKeyMap[row.api_key]?.name || row.api_key.slice(0, 8) + "...";
@@ -632,7 +649,10 @@ export async function getUsageStats(period = "all") {
   });
 
   // By Endpoint
-  db.prepare(`SELECT endpoint, model, provider, MAX(timestamp) as ts, COUNT(*) as calls, SUM(prompt_tokens) as p, SUM(completion_tokens) as c, SUM(cost) as cost FROM usage GROUP BY endpoint, model, provider`).all().forEach(row => {
+  const endpointQuery = sinceTs
+    ? `SELECT endpoint, model, provider, MAX(timestamp) as ts, COUNT(*) as calls, SUM(prompt_tokens) as p, SUM(completion_tokens) as c, SUM(cost) as cost FROM usage WHERE timestamp >= ? GROUP BY endpoint, model, provider`
+    : `SELECT endpoint, model, provider, MAX(timestamp) as ts, COUNT(*) as calls, SUM(prompt_tokens) as p, SUM(completion_tokens) as c, SUM(cost) as cost FROM usage GROUP BY endpoint, model, provider`;
+  (sinceTs ? db.prepare(endpointQuery).all(sinceTs) : db.prepare(endpointQuery).all()).forEach(row => {
     const ep = row.endpoint || "Unknown";
     const key = `${ep}|${row.model}|${row.provider || 'unknown'}`;
     const providerDisplayName = providerNodeNameMap[row.provider] || row.provider;

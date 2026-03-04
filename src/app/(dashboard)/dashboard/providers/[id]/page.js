@@ -1856,10 +1856,15 @@ function AddApiKeyModal({ isOpen, provider, providerName, isCompatible, isAnthro
     apiKey: "",
     priority: 1,
     proxyPoolId: NONE_PROXY_POOL_VALUE,
+    region: "",
+    modelFamily: "openai",
   });
   const [validating, setValidating] = useState(false);
   const [validationResult, setValidationResult] = useState(null);
   const [saving, setSaving] = useState(false);
+
+  const isVertex = provider === "vertex" || provider === "vertex-partner";
+  const isVertexPartner = provider === "vertex-partner";
 
   const handleValidate = async () => {
     setValidating(true);
@@ -1867,7 +1872,7 @@ function AddApiKeyModal({ isOpen, provider, providerName, isCompatible, isAnthro
       const res = await fetch("/api/providers/validate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider, apiKey: formData.apiKey }),
+        body: JSON.stringify({ provider, apiKey: formData.apiKey, region: formData.region }),
       });
       const data = await res.json();
       setValidationResult(data.valid ? "success" : "failed");
@@ -1890,7 +1895,7 @@ function AddApiKeyModal({ isOpen, provider, providerName, isCompatible, isAnthro
         const res = await fetch("/api/providers/validate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ provider, apiKey: formData.apiKey }),
+          body: JSON.stringify({ provider, apiKey: formData.apiKey, region: formData.region }),
         });
         const data = await res.json();
         isValid = !!data.valid;
@@ -1906,6 +1911,8 @@ function AddApiKeyModal({ isOpen, provider, providerName, isCompatible, isAnthro
         apiKey: formData.apiKey,
         priority: formData.priority,
         proxyPoolId: formData.proxyPoolId === NONE_PROXY_POOL_VALUE ? null : formData.proxyPoolId,
+        region: formData.region,
+        modelFamily: formData.modelFamily,
         testStatus: isValid ? "active" : "unknown",
       });
     } finally {
@@ -1916,7 +1923,7 @@ function AddApiKeyModal({ isOpen, provider, providerName, isCompatible, isAnthro
   if (!provider) return null;
 
   return (
-    <Modal isOpen={isOpen} title={`Add ${providerName || provider} API Key`} onClose={onClose}>
+    <Modal isOpen={isOpen} title={`Add ${providerName || provider} ${isVertex ? "Connection" : "API Key"}`} onClose={onClose}>
       <div className="flex flex-col gap-4">
         <Input
           label="Name"
@@ -1924,20 +1931,84 @@ function AddApiKeyModal({ isOpen, provider, providerName, isCompatible, isAnthro
           onChange={(e) => setFormData({ ...formData, name: e.target.value })}
           placeholder="Production Key"
         />
-        <div className="flex gap-2">
-          <Input
-            label="API Key"
-            type="password"
-            value={formData.apiKey}
-            onChange={(e) => setFormData({ ...formData, apiKey: e.target.value })}
-            className="flex-1"
-          />
-          <div className="pt-6">
-            <Button onClick={handleValidate} disabled={!formData.apiKey || validating || saving} variant="secondary">
-              {validating ? "Checking..." : "Check"}
-            </Button>
+        {isVertex ? (
+          <>
+            <div className="flex flex-col gap-1">
+              <label className="text-sm font-medium">
+                Service Account JSON <span className="text-red-500">*</span>
+              </label>
+              <label className="flex items-center gap-2 w-full cursor-pointer rounded-lg border border-dashed border-border hover:border-primary/50 bg-bg px-3 py-2.5 transition-colors">
+                <span className="material-symbols-outlined text-base text-text-muted">upload_file</span>
+                <span className="text-sm text-text-muted">
+                  {formData.apiKey
+                    ? (() => { try { return JSON.parse(formData.apiKey).client_email || "JSON loaded"; } catch { return "JSON loaded"; } })()
+                    : "Select JSON key file…"
+                  }
+                </span>
+                <input
+                  type="file"
+                  accept=".json,application/json"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    const reader = new FileReader();
+                    reader.onload = (ev) => setFormData((prev) => ({ ...prev, apiKey: ev.target.result }));
+                    reader.readAsText(file);
+                    e.target.value = "";
+                  }}
+                />
+              </label>
+              <textarea
+                rows={6}
+                className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm font-mono resize-y focus:outline-none focus:ring-2 focus:ring-primary/50"
+                placeholder={'{\n  "type": "service_account",\n  "project_id": "...",\n  "private_key": "...",\n  "client_email": "..."\n}'}
+                value={formData.apiKey}
+                onChange={(e) => setFormData({ ...formData, apiKey: e.target.value })}
+              />
+              <p className="text-xs text-text-muted">Upload or paste the JSON key file from Google Cloud Console → IAM → Service Accounts → Keys.</p>
+            </div>
+            <Input
+              label="Region"
+              placeholder="us-central1"
+              value={formData.region}
+              onChange={(e) => setFormData({ ...formData, region: e.target.value })}
+              hint="GCP region where your Vertex AI API is enabled (e.g. us-central1, us-east5)"
+            />
+            {isVertexPartner && (
+              <Select
+                label="Model Family"
+                value={formData.modelFamily}
+                onChange={(e) => setFormData({ ...formData, modelFamily: e.target.value })}
+                options={[
+                  { value: "openai", label: "OpenAI Compatible (Llama, Mistral, GLM-5)" },
+                  { value: "anthropic", label: "Anthropic Claude" },
+                ]}
+                hint="Select based on the model type you want to use"
+              />
+            )}
+            <div className="pt-2">
+              <Button onClick={handleValidate} disabled={!formData.apiKey || !formData.region || validating || saving} variant="secondary" fullWidth>
+                {validating ? "Checking..." : "Check"}
+              </Button>
+            </div>
+          </>
+        ) : (
+          <div className="flex gap-2">
+            <Input
+              label="API Key"
+              type="password"
+              value={formData.apiKey}
+              onChange={(e) => setFormData({ ...formData, apiKey: e.target.value })}
+              className="flex-1"
+            />
+            <div className="pt-6">
+              <Button onClick={handleValidate} disabled={!formData.apiKey || validating || saving} variant="secondary">
+                {validating ? "Checking..." : "Check"}
+              </Button>
+            </div>
           </div>
-        </div>
+        )}
         {validationResult && (
           <Badge variant={validationResult === "success" ? "success" : "error"}>
             {validationResult === "success" ? "Valid" : "Invalid"}
@@ -1980,7 +2051,7 @@ function AddApiKeyModal({ isOpen, provider, providerName, isCompatible, isAnthro
         </p>
 
         <div className="flex gap-2">
-          <Button onClick={handleSubmit} fullWidth disabled={!formData.name || !formData.apiKey || saving}>
+          <Button onClick={handleSubmit} fullWidth disabled={!formData.name || !formData.apiKey || (isVertex && !formData.region) || saving}>
             {saving ? "Saving..." : "Save"}
           </Button>
           <Button onClick={onClose} variant="ghost" fullWidth>

@@ -12,8 +12,10 @@
     "start:bun": "NODE_ENV=production bun ./.next/standalone/server.js"
   },
   "dependencies": {
+    "@ai-sdk/google-vertex": "^4.0.73",
     "@monaco-editor/react": "^4.7.0",
     "@xyflow/react": "^12.10.1",
+    "ai": "^6.0.111",
     "bcryptjs": "^3.0.3",
     "confbox": "^0.2.4",
     "express": "^5.2.1",
