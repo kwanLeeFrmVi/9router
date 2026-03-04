@@ -4,8 +4,16 @@ import { formatRetryAfter, checkFallbackError, isModelLockActive, buildModelLock
 import { resolveProviderId } from "@/shared/constants/providers.js";
 import * as log from "../utils/logger.js";
 
-// Mutex to prevent race conditions during account selection
-let selectionMutex = Promise.resolve();
+// Per-provider mutexes to prevent race conditions during account selection
+// Keyed by providerId so different providers don't block each other
+const selectionMutexes = new Map();
+
+function getProviderMutex(providerId) {
+  if (!selectionMutexes.has(providerId)) {
+    selectionMutexes.set(providerId, Promise.resolve());
+  }
+  return selectionMutexes.get(providerId);
+}
 
 /**
  * Get provider credentials from localDb
@@ -15,16 +23,18 @@ let selectionMutex = Promise.resolve();
  * @param {string|null} model - Model name for per-model rate limit filtering
  */
 export async function getProviderCredentials(provider, excludeConnectionId = null, model = null) {
-  // Acquire mutex to prevent race conditions
-  const currentMutex = selectionMutex;
-  let resolveMutex;
-  selectionMutex = new Promise(resolve => { resolveMutex = resolve; });
+  // Resolve alias to provider ID (e.g., "kc" -> "kilocode") before acquiring mutex
+  const providerId = resolveProviderId(provider);
 
+  // Acquire per-provider mutex — different providers can run concurrently
+  const currentMutex = getProviderMutex(providerId);
+  let resolveMutex;
+  selectionMutexes.set(providerId, new Promise(resolve => { resolveMutex = resolve; }));
+
+  let pendingUpdate = null;
+  let credentials = null;
   try {
     await currentMutex;
-
-    // Resolve alias to provider ID (e.g., "kc" -> "kilocode")
-    const providerId = resolveProviderId(provider);
 
     const connections = await getProviderConnections({ provider: providerId, isActive: true });
     log.debug("AUTH", `${provider} | total connections: ${connections.length}, excludeId: ${excludeConnectionId || "none"}, model: ${model || "any"}`);
@@ -94,11 +104,14 @@ export async function getProviderCredentials(provider, excludeConnectionId = nul
       if (current && current.lastUsedAt && currentCount < stickyLimit) {
         // Stay with current account
         connection = current;
-        // Update lastUsedAt and increment count (await to ensure persistence)
-        await updateProviderConnection(connection.id, {
-          lastUsedAt: new Date().toISOString(),
-          consecutiveUseCount: (connection.consecutiveUseCount || 0) + 1
-        });
+        // Telemetry update — captured for fire-and-forget after mutex release
+        pendingUpdate = {
+          id: connection.id,
+          data: {
+            lastUsedAt: new Date().toISOString(),
+            consecutiveUseCount: (connection.consecutiveUseCount || 0) + 1
+          }
+        };
       } else {
         // Pick the least recently used (excluding current if possible)
         const sortedByOldest = [...availableConnections].sort((a, b) => {
@@ -110,11 +123,14 @@ export async function getProviderCredentials(provider, excludeConnectionId = nul
 
         connection = sortedByOldest[0];
 
-        // Update lastUsedAt and reset count to 1 (await to ensure persistence)
-        await updateProviderConnection(connection.id, {
-          lastUsedAt: new Date().toISOString(),
-          consecutiveUseCount: 1
-        });
+        // Telemetry update — captured for fire-and-forget after mutex release
+        pendingUpdate = {
+          id: connection.id,
+          data: {
+            lastUsedAt: new Date().toISOString(),
+            consecutiveUseCount: 1
+          }
+        };
       }
     } else {
       // Default: fill-first (already sorted by priority in getProviderConnections)
@@ -123,7 +139,7 @@ export async function getProviderCredentials(provider, excludeConnectionId = nul
 
     const resolvedProxy = await resolveConnectionProxyConfig(connection.providerSpecificData || {});
 
-    return {
+    credentials = {
       apiKey: connection.apiKey,
       accessToken: connection.accessToken,
       refreshToken: connection.refreshToken,
@@ -147,6 +163,14 @@ export async function getProviderCredentials(provider, excludeConnectionId = nul
   } finally {
     if (resolveMutex) resolveMutex();
   }
+
+  // Fire-and-forget non-critical telemetry update (lastUsedAt, consecutiveUseCount)
+  // Runs after mutex is released so it doesn't block the next queued request
+  if (pendingUpdate) {
+    updateProviderConnection(pendingUpdate.id, pendingUpdate.data).catch(() => {});
+  }
+
+  return credentials;
 }
 
 /**

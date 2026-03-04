@@ -601,12 +601,14 @@ export async function updateProviderConnection(id, data) {
   };
 
   await db.write();
-  await invalidateUsageCacheForConnectionIds([id]);
-  await invalidateApiCachesForLocalDbChange();
+  await Promise.all([
+    invalidateUsageCacheForConnectionIds([id]),
+    invalidateApiCachesForLocalDbChange(),
+  ]);
 
   // Reorder if priority was changed
   if (data.priority !== undefined) {
-    await reorderProviderConnections(providerId);
+    await reorderProviderConnections(providerId, db);
   }
 
   return db.data.providerConnections[index];
@@ -638,8 +640,8 @@ export async function deleteProviderConnection(id) {
 /**
  * Reorder provider connections to ensure unique, sequential priorities
  */
-export async function reorderProviderConnections(providerId) {
-  const db = await getDb();
+export async function reorderProviderConnections(providerId, db) {
+  if (!db) db = await getDb();
   if (!db.data.providerConnections) return;
 
   const providerConnections = db.data.providerConnections
