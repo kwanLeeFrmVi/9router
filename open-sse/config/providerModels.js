@@ -14,7 +14,9 @@ export const PROVIDER_MODELS = {
     { id: "claude-sonnet-4-5-20250929", name: "Claude 4.5 Sonnet" },
     { id: "claude-haiku-4-5-20251001", name: "Claude 4.5 Haiku" },
   ],
-  cx: [  // OpenAI Codex
+  cx: [
+    // OpenAI Codex
+    // GPT 5.4
     { id: "gpt-5.4", name: "GPT 5.4" },
     // GPT 5.3 Codex - all thinking levels
     { id: "gpt-5.3-codex", name: "GPT 5.3 Codex" },
