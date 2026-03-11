@@ -9,6 +9,7 @@ import { getModelTargetFormat, PROVIDER_ID_TO_ALIAS } from "../config/providerMo
 import { createErrorResult, createFormattedErrorResult, parseUpstreamError, formatProviderError } from "../utils/error.js";
 import { HTTP_STATUS } from "../config/constants.js";
 import { handleBypassRequest } from "../utils/bypassHandler.js";
+import { getProjectIdForConnection, invalidateProjectId } from "../services/projectId.js";
 import { trackPendingRequest, appendRequestLog, saveRequestDetail } from "@/lib/usageDb.js";
 import { getExecutor } from "../executors/index.js";
 import { buildRequestDetail, extractRequestConfig } from "./chatCore/requestDetail.js";
@@ -148,6 +149,31 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
       } catch { log?.warn?.("TOKEN", `${provider.toUpperCase()} | retry after refresh failed`); }
     } else {
       log?.warn?.("TOKEN", `${provider.toUpperCase()} | refresh failed`);
+    }
+  }
+
+  if (
+    provider === "gemini-cli" &&
+    providerResponse.status === HTTP_STATUS.NOT_FOUND &&
+    connectionId &&
+    credentials?.accessToken
+  ) {
+    try {
+      invalidateProjectId(connectionId);
+      const refreshedProjectId = await getProjectIdForConnection(connectionId, credentials.accessToken);
+      if (refreshedProjectId && refreshedProjectId !== credentials.projectId) {
+        log?.info?.("PROJECT", `${provider.toUpperCase()} | refreshed projectId for retry`);
+        credentials.projectId = refreshedProjectId;
+        const retryResult = await executor.execute({ model, body: translatedBody, stream, credentials, signal: streamController.signal, log, proxyOptions });
+        if (retryResult.response.ok) {
+          providerResponse = retryResult.response;
+          providerUrl = retryResult.url;
+          providerHeaders = retryResult.headers;
+          finalBody = retryResult.transformedBody;
+        }
+      }
+    } catch (error) {
+      log?.warn?.("PROJECT", `${provider.toUpperCase()} | projectId retry failed: ${error?.message || error}`);
     }
   }
 

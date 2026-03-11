@@ -261,6 +261,29 @@ function flattenTypeArrays(obj) {
   }
 }
 
+// Infer missing types for nested objects
+function inferMissingTypes(obj) {
+  if (!obj || typeof obj !== "object") return;
+
+  if (obj.properties && typeof obj.properties === "object") {
+    for (const prop in obj.properties) {
+      if (obj.properties[prop] && typeof obj.properties[prop] === "object") {
+        if (!obj.properties[prop].type) {
+          obj.properties[prop].type = "object";
+        }
+        inferMissingTypes(obj.properties[prop]);
+      }
+    }
+  }
+
+  if (obj.items && typeof obj.items === "object") {
+    if (!obj.items.type) {
+      obj.items.type = "object";
+    }
+    inferMissingTypes(obj.items);
+  }
+}
+
 // Clean JSON Schema for Antigravity API compatibility - removes unsupported keywords recursively
 // Reference: CLIProxyAPI/internal/util/gemini_schema.go
 export function cleanJSONSchemaForAntigravity(schema) {
@@ -280,6 +303,7 @@ export function cleanJSONSchemaForAntigravity(schema) {
 
   // Phase 3: Remove all unsupported keywords at ALL levels (including inside arrays)
   removeUnsupportedKeywords(cleaned, UNSUPPORTED_SCHEMA_CONSTRAINTS);
+  inferMissingTypes(cleaned);
 
   // Phase 4: Cleanup required fields recursively
   function cleanupRequired(obj) {

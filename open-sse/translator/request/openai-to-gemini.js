@@ -250,7 +250,7 @@ export function openaiToGeminiCLIRequest(model, body, stream) {
   return gemini;
 }
 
-// Wrap Gemini CLI format in Cloud Code wrapper
+// Wrap Gemini CLI format in Cloud Code envelope
 function wrapInCloudCodeEnvelope(model, geminiCLI, credentials = null, isAntigravity = false) {
   const projectId = credentials?.projectId || generateProjectId();
 
