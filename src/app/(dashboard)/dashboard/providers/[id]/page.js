@@ -1023,7 +1023,7 @@ export default function ProviderDetailPage() {
             )}
           </div>
         ) : (
-          { connectionsList }
+          connectionsList
         )}
       </Card>
 

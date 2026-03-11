@@ -756,6 +756,17 @@ export const DEFAULT_PRICING = {
     }
   },
 
+  // Vertex AI Partner Models
+  "vertex-partner": {
+    "zai-org/glm-5-maas": {
+      input: 1,
+      output: 3.2,
+      cached: 0.1,
+      reasoning: 3.2,
+      cache_creation: 1
+    }
+  },
+
   // MiniMax
   minimax: {
     "MiniMax-M2.1": {

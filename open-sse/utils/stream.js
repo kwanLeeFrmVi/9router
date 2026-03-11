@@ -193,6 +193,49 @@ export function createSSEStream(options = {}) {
           let output;
           let injectedUsage = false;
 
+          // Handle raw Ollama NDJSON chunks (no "data: " prefix) - normalize to OpenAI SSE
+          if (trimmed.startsWith("{")) {
+            try {
+              const rawParsed = JSON.parse(trimmed);
+              const normalized = normalizeProviderStreamChunk(rawParsed, null);
+              if (normalized && normalized.choices) {
+                // Track content for usage estimation
+                const delta = normalized.choices[0]?.delta;
+                if (delta?.content && typeof delta.content === "string") {
+                  totalContentLength += delta.content.length;
+                  accumulatedContent += delta.content;
+                }
+
+                // Extract usage from Ollama final chunk (eval_count / prompt_eval_count)
+                const extracted = extractUsage(normalized);
+                if (extracted) usage = extracted;
+
+                if (rawParsed.done) {
+                  // Emit the final finish chunk (with usage + finish_reason) then [DONE]
+                  if (!hasValidUsage(normalized.usage) && totalContentLength > 0) {
+                    const estimated = estimateUsage(body, totalContentLength, FORMATS.OPENAI);
+                    normalized.usage = filterUsageForFormat(estimated, FORMATS.OPENAI);
+                    usage = estimated;
+                  } else if (usage) {
+                    const buffered = addBufferToUsage(usage);
+                    normalized.usage = filterUsageForFormat(buffered, FORMATS.OPENAI);
+                  }
+                  const finishOutput = `data: ${JSON.stringify(normalized)}\n\n`;
+                  reqLogger?.appendConvertedChunk?.(finishOutput);
+                  controller.enqueue(sharedEncoder.encode(finishOutput));
+                  const doneOutput = "data: [DONE]\n\n";
+                  reqLogger?.appendConvertedChunk?.(doneOutput);
+                  controller.enqueue(sharedEncoder.encode(doneOutput));
+                } else if (hasValuableContent(normalized, FORMATS.OPENAI)) {
+                  const sseOutput = `data: ${JSON.stringify(normalized)}\n\n`;
+                  reqLogger?.appendConvertedChunk?.(sseOutput);
+                  controller.enqueue(sharedEncoder.encode(sseOutput));
+                }
+              }
+            } catch { }
+            continue;
+          }
+
           if (trimmed.startsWith("data:") && trimmed.slice(5).trim() !== "[DONE]") {
             try {
               const parsed = JSON.parse(trimmed.slice(5).trim());
