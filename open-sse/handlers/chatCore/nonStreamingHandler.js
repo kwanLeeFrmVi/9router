@@ -123,6 +123,53 @@ export function translateNonStreamingResponse(responseBody, targetFormat, source
   return responseBody;
 }
 
+function normalizeNativeOllamaJson(responseBody, fallbackModel) {
+  if (!responseBody || typeof responseBody !== "object" || !responseBody.message || Array.isArray(responseBody.choices)) {
+    return responseBody;
+  }
+
+  const message = responseBody.message || {};
+  const content = typeof message.content === "string" ? message.content : "";
+  const rawToolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+  const toolCalls = rawToolCalls.map((tc, idx) => ({
+    id: tc?.id || `call_${Date.now()}_${idx}`,
+    type: "function",
+    function: {
+      name: tc?.function?.name || "unknown_tool",
+      arguments: typeof tc?.function?.arguments === "string"
+        ? tc.function.arguments
+        : JSON.stringify(tc?.function?.arguments || {})
+    }
+  }));
+
+  const normalizedMessage = { role: message.role || "assistant" };
+  if (content) normalizedMessage.content = content;
+  if (toolCalls.length > 0) normalizedMessage.tool_calls = toolCalls;
+  if (!normalizedMessage.content && !normalizedMessage.tool_calls) normalizedMessage.content = "";
+
+  const normalized = {
+    id: responseBody.id || `chatcmpl-${Date.now()}`,
+    object: "chat.completion",
+    created: Math.floor(Date.now() / 1000),
+    model: responseBody.model || fallbackModel || "unknown",
+    choices: [{
+      index: 0,
+      message: normalizedMessage,
+      finish_reason: responseBody.done ? (toolCalls.length > 0 ? "tool_calls" : "stop") : null
+    }]
+  };
+
+  if (typeof responseBody.prompt_eval_count === "number" || typeof responseBody.eval_count === "number") {
+    normalized.usage = {
+      prompt_tokens: responseBody.prompt_eval_count || 0,
+      completion_tokens: responseBody.eval_count || 0,
+      total_tokens: (responseBody.prompt_eval_count || 0) + (responseBody.eval_count || 0)
+    };
+  }
+
+  return normalized;
+}
+
 /**
  * Handle non-streaming response from provider.
  */
@@ -148,6 +195,8 @@ export async function handleNonStreamingResponse({ providerResponse, provider, m
       return createFormattedErrorResult(HTTP_STATUS.BAD_GATEWAY, `Invalid JSON response from ${provider}`, sourceFormat);
     }
   }
+
+  responseBody = normalizeNativeOllamaJson(responseBody, model);
 
   reqLogger.logProviderResponse(providerResponse.status, providerResponse.statusText, providerResponse.headers, responseBody);
   if (onRequestSuccess) await onRequestSuccess();
