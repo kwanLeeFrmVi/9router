@@ -1,7 +1,7 @@
 import { register } from "../index.js";
 import { FORMATS } from "../formats.js";
 import { DEFAULT_THINKING_GEMINI_SIGNATURE } from "../../config/defaultThinkingSignature.js";
-import { ANTIGRAVITY_DEFAULT_SYSTEM } from "../../config/appConstants.js";
+import { ANTIGRAVITY_DEFAULT_SYSTEM } from "../../config/constants.js";
 import { openaiToClaudeRequestForAntigravity } from "./openai-to-claude.js";
 
 function generateUUID() {
@@ -69,10 +69,30 @@ function openaiToGeminiBase(model, body, stream) {
 
   // Convert messages
   if (body.messages && Array.isArray(body.messages)) {
+    const isThinkingEnabled = !!body.reasoning_effort || !!(body.thinking?.type === "enabled");
+
     for (let i = 0; i < body.messages.length; i++) {
       const msg = body.messages[i];
       const role = msg.role;
       const content = msg.content;
+
+      // If thinking is enabled, we need to flatten tool messages to user messages
+      // since their corresponding assistant functionCalls were flattened
+      if (role === "tool" && isThinkingEnabled) {
+        let resp = content;
+        let parsedResp = tryParseJSON(resp);
+        if (parsedResp === null) {
+          parsedResp = { result: resp };
+        } else if (typeof parsedResp !== "object") {
+          parsedResp = { result: parsedResp };
+        }
+
+        result.contents.push({
+          role: "user",
+          parts: [{ text: `Tool result for ${msg.tool_call_id || 'unknown'}: ${JSON.stringify(parsedResp)}` }]
+        });
+        continue;
+      }
 
       if (role === "system" && body.messages.length > 1) {
         result.systemInstruction = {
@@ -87,15 +107,13 @@ function openaiToGeminiBase(model, body, stream) {
       } else if (role === "assistant") {
         const parts = [];
 
-        // Thinking/reasoning → thought part with signature
-        if (msg.reasoning_content) {
+        // If we have reasoning_content AND the original reasoning_signature,
+        // we can safely reconstruct the valid thought part for Gemini.
+        if (msg.reasoning_content && msg.reasoning_signature) {
           parts.push({
             thought: true,
+            thoughtSignature: msg.reasoning_signature,
             text: msg.reasoning_content
-          });
-          parts.push({
-            thoughtSignature: DEFAULT_THINKING_GEMINI_SIGNATURE,
-            text: ""
           });
         }
 
@@ -107,62 +125,79 @@ function openaiToGeminiBase(model, body, stream) {
         }
 
         if (msg.tool_calls && Array.isArray(msg.tool_calls)) {
-          const toolCallIds = [];
-          for (const tc of msg.tool_calls) {
-            if (tc.type !== "function") continue;
+          // If thinking mode is requested, we CANNOT send historical function calls
+          // without thought_signatures (Gemini CLI will reject them with 400).
+          // Since signatures are lost, we flatten the tool calls into plain text.
+          const isThinkingEnabled = !!body.reasoning_effort || !!(body.thinking?.type === "enabled");
 
-            const args = tryParseJSON(tc.function?.arguments || "{}");
-            parts.push({
-              thoughtSignature: DEFAULT_THINKING_GEMINI_SIGNATURE,
-              functionCall: {
-                id: tc.id,
-                name: tc.function.name,
-                args: args
-              }
-            });
-            toolCallIds.push(tc.id);
-          }
+          if (isThinkingEnabled) {
+            let toolCallText = "I made the following tool calls:\n";
+            for (const tc of msg.tool_calls) {
+              toolCallText += `- ${tc.function?.name || "unknown"} with arguments: ${tc.function?.arguments || "{}"}\n`;
+            }
+            parts.push({ text: toolCallText });
 
-          if (parts.length > 0) {
-            result.contents.push({ role: "model", parts });
-          }
+            // Also need to flag tool responses to be flattened
+            if (parts.length > 0) {
+              result.contents.push({ role: "model", parts });
+            }
+          } else {
+            const toolCallIds = [];
+            for (const tc of msg.tool_calls) {
+              if (tc.type !== "function") continue;
 
-          // Check if there are actual tool responses in the next messages
-          const hasActualResponses = toolCallIds.some(fid => toolResponses[fid]);
-
-          if (hasActualResponses) {
-            const toolParts = [];
-            for (const fid of toolCallIds) {
-              if (!toolResponses[fid]) continue;
-
-              let name = tcID2Name[fid];
-              if (!name) {
-                const idParts = fid.split("-");
-                if (idParts.length > 2) {
-                  name = idParts.slice(0, -2).join("-");
-                } else {
-                  name = fid;
-                }
-              }
-
-              let resp = toolResponses[fid];
-              let parsedResp = tryParseJSON(resp);
-              if (parsedResp === null) {
-                parsedResp = { result: resp };
-              } else if (typeof parsedResp !== "object") {
-                parsedResp = { result: parsedResp };
-              }
-
-              toolParts.push({
-                functionResponse: {
-                  id: fid,
-                  name: name,
-                  response: { result: parsedResp }
+              const args = tryParseJSON(tc.function?.arguments || "{}");
+              parts.push({
+                functionCall: {
+                  id: tc.id,
+                  name: tc.function.name,
+                  args: args
                 }
               });
+              toolCallIds.push(tc.id);
             }
-            if (toolParts.length > 0) {
-              result.contents.push({ role: "user", parts: toolParts });
+
+            if (parts.length > 0) {
+              result.contents.push({ role: "model", parts });
+            }
+
+            // Check if there are actual tool responses in the next messages
+            const hasActualResponses = toolCallIds.some(fid => toolResponses[fid]);
+
+            if (hasActualResponses) {
+              const toolParts = [];
+              for (const fid of toolCallIds) {
+                if (!toolResponses[fid]) continue;
+
+                let name = tcID2Name[fid];
+                if (!name) {
+                  const idParts = fid.split("-");
+                  if (idParts.length > 2) {
+                    name = idParts.slice(0, -2).join("-");
+                  } else {
+                    name = fid;
+                  }
+                }
+
+                let resp = toolResponses[fid];
+                let parsedResp = tryParseJSON(resp);
+                if (parsedResp === null) {
+                  parsedResp = { result: resp };
+                } else if (typeof parsedResp !== "object") {
+                  parsedResp = { result: parsedResp };
+                }
+
+                toolParts.push({
+                  functionResponse: {
+                    id: fid,
+                    name: name,
+                    response: { result: parsedResp }
+                  }
+                });
+              }
+              if (toolParts.length > 0) {
+                result.contents.push({ role: "user", parts: toolParts });
+              }
             }
           }
         } else if (parts.length > 0) {
@@ -321,33 +356,68 @@ function wrapInCloudCodeEnvelopeForClaude(model, claudeRequest, credentials = nu
 
   // Convert Claude messages to Gemini contents
   if (claudeRequest.messages && Array.isArray(claudeRequest.messages)) {
+    const isThinkingEnabled = !!(claudeRequest.thinking?.type === "enabled");
+
     for (const msg of claudeRequest.messages) {
       const parts = [];
 
       if (Array.isArray(msg.content)) {
-        for (const block of msg.content) {
-          if (block.type === "text") {
-            parts.push({ text: block.text });
-          } else if (block.type === "tool_use") {
-            parts.push({
-              functionCall: {
-                id: block.id,
-                name: block.name,
-                args: block.input || {}
-              }
-            });
-          } else if (block.type === "tool_result") {
-            let content = block.content;
-            if (Array.isArray(content)) {
-              content = content.map(c => c.type === "text" ? c.text : JSON.stringify(c)).join("\n");
+        // First check if there are tool_use blocks in this message
+        const hasToolUse = msg.content.some(b => b.type === "tool_use");
+
+        if (isThinkingEnabled && hasToolUse) {
+          // If thinking is enabled, flatten tool_use into text to avoid signature validation errors
+          let toolCallText = "I made the following tool calls:\n";
+          for (const block of msg.content) {
+            if (block.type === "text") {
+              parts.push({ text: block.text });
+            } else if (block.type === "tool_use") {
+              toolCallText += `- ${block.name || "unknown"} with arguments: ${JSON.stringify(block.input || {})}\n`;
             }
-            parts.push({
-              functionResponse: {
-                id: block.tool_use_id,
-                name: "unknown",
-                response: { result: tryParseJSON(content) || content }
+          }
+          parts.push({ text: toolCallText });
+        } else {
+          // Normal processing
+          for (const block of msg.content) {
+            if (block.type === "text") {
+              parts.push({ text: block.text });
+            } else if (block.type === "thinking" || block.type === "redacted_thinking") {
+              // If we have the original Gemini signature, reconstruct the thought part
+              if (block.thinking && block.signature) {
+                parts.push({
+                  thought: true,
+                  thoughtSignature: block.signature,
+                  text: block.thinking
+                });
               }
-            });
+            } else if (block.type === "tool_use") {
+              parts.push({
+                functionCall: {
+                  id: block.id,
+                  name: block.name,
+                  args: block.input || {}
+                }
+              });
+            } else if (block.type === "tool_result") {
+              let content = block.content;
+              if (Array.isArray(content)) {
+                content = content.map(c => c.type === "text" ? c.text : JSON.stringify(c)).join("\n");
+              }
+
+              if (isThinkingEnabled) {
+                // If thinking is enabled, flatten tool_result into text
+                const parsedResp = tryParseJSON(content) || content;
+                parts.push({ text: `Tool result for ${block.tool_use_id || 'unknown'}: ${JSON.stringify(parsedResp)}` });
+              } else {
+                parts.push({
+                  functionResponse: {
+                    id: block.tool_use_id,
+                    name: "unknown",
+                    response: { result: tryParseJSON(content) || content }
+                  }
+                });
+              }
+            }
           }
         }
       } else if (typeof msg.content === "string") {
@@ -355,8 +425,12 @@ function wrapInCloudCodeEnvelopeForClaude(model, claudeRequest, credentials = nu
       }
 
       if (parts.length > 0) {
+        // If we flattened tool results, role should be user
+        const isToolResultOnly = msg.content && Array.isArray(msg.content) &&
+          msg.content.every(b => b.type === "tool_result");
+
         envelope.request.contents.push({
-          role: msg.role === "assistant" ? "model" : "user",
+          role: msg.role === "assistant" ? "model" : (isToolResultOnly ? "user" : "user"),
           parts
         });
       }

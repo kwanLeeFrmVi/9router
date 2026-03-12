@@ -82,7 +82,7 @@ export function openaiToClaudeResponse(chunk, state) {
     state.nextBlockIndex = 0;
 
     const initialUsage = state.usage || { input_tokens: 0, output_tokens: 0 };
-    
+
     // Ensure we only pass valid Claude Usage object fields, not raw OpenAI fields.
     // Cherry Studio and other strict clients crash if they see prompt_tokens in a Claude message.
     const cleanUsage = {
@@ -115,10 +115,14 @@ export function openaiToClaudeResponse(chunk, state) {
     if (!state.thinkingBlockStarted) {
       state.thinkingBlockIndex = state.nextBlockIndex++;
       state.thinkingBlockStarted = true;
+      const contentBlock = { type: "thinking", thinking: "" };
+      if (delta.reasoning_signature) {
+        contentBlock.signature = delta.reasoning_signature;
+      }
       results.push({
         type: "content_block_start",
         index: state.thinkingBlockIndex,
-        content_block: { type: "thinking", thinking: "" }
+        content_block: contentBlock
       });
     }
 

@@ -123,11 +123,24 @@ function convertClaudeMessage(msg) {
     const parts = [];
     const toolCalls = [];
     const toolResults = [];
+    let thinkingContent = null;
+    let thinkingSignature = null;
 
     for (const block of msg.content) {
       switch (block.type) {
         case "text":
           parts.push({ type: "text", text: block.text });
+          break;
+
+        case "thinking":
+        case "redacted_thinking":
+          // Extract thinking content for reasoning_content field
+          if (block.thinking) {
+            thinkingContent = block.thinking;
+          }
+          if (block.signature) {
+            thinkingSignature = block.signature;
+          }
           break;
 
         case "image":
@@ -189,16 +202,29 @@ function convertClaudeMessage(msg) {
       if (parts.length > 0) {
         result.content = normalizeOpenAIContent(parts);
       }
+      if (thinkingContent) {
+        result.reasoning_content = thinkingContent;
+        if (thinkingSignature) {
+          result.reasoning_signature = thinkingSignature;
+        }
+      }
       result.tool_calls = toolCalls;
       return result;
     }
 
     // Return content
     if (parts.length > 0) {
-      return {
+      const result = {
         role,
         content: normalizeOpenAIContent(parts)
       };
+      if (thinkingContent && role === "assistant") {
+        result.reasoning_content = thinkingContent;
+        if (thinkingSignature) {
+          result.reasoning_signature = thinkingSignature;
+        }
+      }
+      return result;
     }
 
     // Empty content array
