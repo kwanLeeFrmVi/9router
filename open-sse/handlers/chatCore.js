@@ -34,7 +34,6 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   const bypassResponse = handleBypassRequest(body, model, userAgent, ccFilterNaming);
   if (bypassResponse) return bypassResponse;
 
-
   const alias = PROVIDER_ID_TO_ALIAS[provider] || provider;
   const modelTargetFormat = getModelTargetFormat(alias, model);
   const targetFormat = modelTargetFormat || getTargetFormat(provider);
@@ -207,6 +206,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
 
   // Provider forced streaming but client wants JSON
   if (!clientRequestedStreaming && providerRequiresStreaming) {
+    log?.debug?.("SSE→JSON", `Converting streaming response to JSON for ${provider}`);
     const result = await handleForcedSSEToJson({ ...sharedCtx, providerResponse, sourceFormat, trackDone, appendLog });
     if (result) return result;
   }

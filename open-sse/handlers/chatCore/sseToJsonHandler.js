@@ -6,6 +6,44 @@ import { buildRequestDetail, extractRequestConfig, saveUsageStats } from "./requ
 import { saveRequestDetail, appendRequestLog } from "@/lib/usageDb.js";
 
 /**
+ * Parse Ollama NDJSON stream into OpenAI chat completion format.
+ */
+function parseOllamaNDJSONToOpenAI(ndjsonText, fallbackModel) {
+  const lines = String(ndjsonText || "").split("\n").filter(l => l.trim());
+  if (lines.length === 0) return null;
+
+  let fullContent = "";
+  let lastChunk = null;
+
+  for (const line of lines) {
+    try {
+      const chunk = JSON.parse(line);
+      if (chunk.message?.content) fullContent += chunk.message.content;
+      lastChunk = chunk;
+    } catch { /* ignore malformed lines */ }
+  }
+
+  if (!lastChunk) return null;
+
+  return {
+    id: `chatcmpl-${Date.now()}`,
+    object: "chat.completion",
+    created: Math.floor(Date.now() / 1000),
+    model: lastChunk.model || fallbackModel || "unknown",
+    choices: [{
+      index: 0,
+      message: { role: "assistant", content: fullContent },
+      finish_reason: lastChunk.done ? "stop" : null
+    }],
+    usage: {
+      prompt_tokens: lastChunk.prompt_eval_count || 0,
+      completion_tokens: lastChunk.eval_count || 0,
+      total_tokens: (lastChunk.prompt_eval_count || 0) + (lastChunk.eval_count || 0)
+    }
+  };
+}
+
+/**
  * Parse OpenAI-style SSE text into a single chat completion JSON.
  * Used when provider forces streaming but client wants non-streaming.
  */
@@ -58,7 +96,9 @@ export function parseSSEToOpenAIResponse(rawSSE, fallbackModel) {
 export async function handleForcedSSEToJson({ providerResponse, sourceFormat, provider, model, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, trackDone, appendLog }) {
   const contentType = providerResponse.headers.get("content-type") || "";
   const isSSE = contentType.includes("text/event-stream") || (contentType === "" && provider === "codex");
-  if (!isSSE) return null; // not handled here
+  const isOllamaNDJSON = provider === "ollama" && contentType.includes("application/json");
+
+  if (!isSSE && !isOllamaNDJSON) return null; // not handled here
 
   trackDone();
 
@@ -140,11 +180,13 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, pr
     }
   }
 
-  // Standard Chat Completions SSE path
+  // Standard Chat Completions SSE path (or Ollama NDJSON)
   try {
-    const sseText = await providerResponse.text();
-    const parsed = parseSSEToOpenAIResponse(sseText, model);
-    if (!parsed) return createFormattedErrorResult(HTTP_STATUS.BAD_GATEWAY, "Invalid SSE response for non-streaming request", sourceFormat);
+    const responseText = await providerResponse.text();
+    const parsed = isOllamaNDJSON
+      ? parseOllamaNDJSONToOpenAI(responseText, model)
+      : parseSSEToOpenAIResponse(responseText, model);
+    if (!parsed) return createFormattedErrorResult(HTTP_STATUS.BAD_GATEWAY, "Invalid streaming response for non-streaming request", sourceFormat);
 
     if (onRequestSuccess) await onRequestSuccess();
 
