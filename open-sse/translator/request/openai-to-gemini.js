@@ -356,17 +356,16 @@ function wrapInCloudCodeEnvelopeForClaude(model, claudeRequest, credentials = nu
 
   // Convert Claude messages to Gemini contents
   if (claudeRequest.messages && Array.isArray(claudeRequest.messages)) {
-    const isThinkingEnabled = !!(claudeRequest.thinking?.type === "enabled");
-
     for (const msg of claudeRequest.messages) {
       const parts = [];
 
       if (Array.isArray(msg.content)) {
-        // First check if there are tool_use blocks in this message
+        // Always flatten tool_use blocks to text since we never have valid thoughtSignature
+        // Gemini CLI requires thoughtSignature on ALL functionCall parts, even historical ones
         const hasToolUse = msg.content.some(b => b.type === "tool_use");
 
-        if (isThinkingEnabled && hasToolUse) {
-          // If thinking is enabled, flatten tool_use into text to avoid signature validation errors
+        if (hasToolUse) {
+          // Flatten tool_use into text to avoid signature validation errors
           let toolCallText = "I made the following tool calls:\n";
           for (const block of msg.content) {
             if (block.type === "text") {
@@ -377,7 +376,7 @@ function wrapInCloudCodeEnvelopeForClaude(model, claudeRequest, credentials = nu
           }
           parts.push({ text: toolCallText });
         } else {
-          // Normal processing
+          // Normal processing for non-tool messages
           for (const block of msg.content) {
             if (block.type === "text") {
               parts.push({ text: block.text });
@@ -390,33 +389,15 @@ function wrapInCloudCodeEnvelopeForClaude(model, claudeRequest, credentials = nu
                   text: block.thinking
                 });
               }
-            } else if (block.type === "tool_use") {
-              parts.push({
-                functionCall: {
-                  id: block.id,
-                  name: block.name,
-                  args: block.input || {}
-                }
-              });
             } else if (block.type === "tool_result") {
               let content = block.content;
               if (Array.isArray(content)) {
                 content = content.map(c => c.type === "text" ? c.text : JSON.stringify(c)).join("\n");
               }
 
-              if (isThinkingEnabled) {
-                // If thinking is enabled, flatten tool_result into text
-                const parsedResp = tryParseJSON(content) || content;
-                parts.push({ text: `Tool result for ${block.tool_use_id || 'unknown'}: ${JSON.stringify(parsedResp)}` });
-              } else {
-                parts.push({
-                  functionResponse: {
-                    id: block.tool_use_id,
-                    name: "unknown",
-                    response: { result: tryParseJSON(content) || content }
-                  }
-                });
-              }
+              // Always flatten tool_result into text to match flattened tool_use
+              const parsedResp = tryParseJSON(content) || content;
+              parts.push({ text: `Tool result for ${block.tool_use_id || 'unknown'}: ${JSON.stringify(parsedResp)}` });
             }
           }
         }
