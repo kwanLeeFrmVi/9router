@@ -76,9 +76,9 @@ function openaiToGeminiBase(model, body, stream) {
       const role = msg.role;
       const content = msg.content;
 
-      // If thinking is enabled, we need to flatten tool messages to user messages
-      // since their corresponding assistant functionCalls were flattened
-      if (role === "tool" && isThinkingEnabled) {
+      // Always flatten tool messages since we always flatten tool calls
+      // (Gemini CLI requires thoughtSignature on all functionCall parts)
+      if (role === "tool") {
         let resp = content;
         let parsedResp = tryParseJSON(resp);
         if (parsedResp === null) {
@@ -125,80 +125,17 @@ function openaiToGeminiBase(model, body, stream) {
         }
 
         if (msg.tool_calls && Array.isArray(msg.tool_calls)) {
-          // If thinking mode is requested, we CANNOT send historical function calls
-          // without thought_signatures (Gemini CLI will reject them with 400).
-          // Since signatures are lost, we flatten the tool calls into plain text.
-          const isThinkingEnabled = !!body.reasoning_effort || !!(body.thinking?.type === "enabled");
+          // Gemini CLI ALWAYS requires thoughtSignature on ALL functionCall parts.
+          // Since we never have valid signatures for historical tool calls,
+          // we must always flatten them to plain text.
+          let toolCallText = "I made the following tool calls:\n";
+          for (const tc of msg.tool_calls) {
+            toolCallText += `- ${tc.function?.name || "unknown"} with arguments: ${tc.function?.arguments || "{}"}\n`;
+          }
+          parts.push({ text: toolCallText });
 
-          if (isThinkingEnabled) {
-            let toolCallText = "I made the following tool calls:\n";
-            for (const tc of msg.tool_calls) {
-              toolCallText += `- ${tc.function?.name || "unknown"} with arguments: ${tc.function?.arguments || "{}"}\n`;
-            }
-            parts.push({ text: toolCallText });
-
-            // Also need to flag tool responses to be flattened
-            if (parts.length > 0) {
-              result.contents.push({ role: "model", parts });
-            }
-          } else {
-            const toolCallIds = [];
-            for (const tc of msg.tool_calls) {
-              if (tc.type !== "function") continue;
-
-              const args = tryParseJSON(tc.function?.arguments || "{}");
-              parts.push({
-                functionCall: {
-                  id: tc.id,
-                  name: tc.function.name,
-                  args: args
-                }
-              });
-              toolCallIds.push(tc.id);
-            }
-
-            if (parts.length > 0) {
-              result.contents.push({ role: "model", parts });
-            }
-
-            // Check if there are actual tool responses in the next messages
-            const hasActualResponses = toolCallIds.some(fid => toolResponses[fid]);
-
-            if (hasActualResponses) {
-              const toolParts = [];
-              for (const fid of toolCallIds) {
-                if (!toolResponses[fid]) continue;
-
-                let name = tcID2Name[fid];
-                if (!name) {
-                  const idParts = fid.split("-");
-                  if (idParts.length > 2) {
-                    name = idParts.slice(0, -2).join("-");
-                  } else {
-                    name = fid;
-                  }
-                }
-
-                let resp = toolResponses[fid];
-                let parsedResp = tryParseJSON(resp);
-                if (parsedResp === null) {
-                  parsedResp = { result: resp };
-                } else if (typeof parsedResp !== "object") {
-                  parsedResp = { result: parsedResp };
-                }
-
-                toolParts.push({
-                  functionResponse: {
-                    id: fid,
-                    name: name,
-                    response: { result: parsedResp }
-                  }
-                });
-              }
-              if (toolParts.length > 0) {
-                result.contents.push({ role: "user", parts: toolParts });
-              }
-            }
+          if (parts.length > 0) {
+            result.contents.push({ role: "model", parts });
           }
         } else if (parts.length > 0) {
           result.contents.push({ role: "model", parts });
