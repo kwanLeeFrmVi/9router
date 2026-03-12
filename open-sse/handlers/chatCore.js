@@ -34,13 +34,14 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   const bypassResponse = handleBypassRequest(body, model, userAgent, ccFilterNaming);
   if (bypassResponse) return bypassResponse;
 
+
   const alias = PROVIDER_ID_TO_ALIAS[provider] || provider;
   const modelTargetFormat = getModelTargetFormat(alias, model);
   const targetFormat = modelTargetFormat || getTargetFormat(provider);
 
   const clientRequestedStreaming = body.stream === true || sourceFormat === FORMATS.ANTIGRAVITY || sourceFormat === FORMATS.GEMINI || sourceFormat === FORMATS.GEMINI_CLI;
-  const providerRequiresStreaming = provider === "openai" || provider === "codex";
-  let stream = providerRequiresStreaming ? true : (body.stream !== false);
+  const providerRequiresStreaming = provider === "openai" || provider === "codex" || provider === "ollama";
+  let stream = providerRequiresStreaming ? true : clientRequestedStreaming;
 
   // Check client Accept header preference for non-streaming requests
   // This fixes AI SDK compatibility where clients send Accept: application/json
