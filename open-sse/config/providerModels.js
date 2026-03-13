@@ -317,16 +317,9 @@ export const PROVIDER_MODELS = {
     { id: "gemini-3.1-pro-preview", name: "Gemini 3.1 Pro Preview" },
   ],
   "vertex-partner": [
-    // Anthropic Claude (modelFamily: "anthropic")
-    { id: "claude-opus-4@20250514", name: "Claude Opus 4 (Vertex)" },
-    { id: "claude-sonnet-4@20250514", name: "Claude Sonnet 4 (Vertex)" },
-    { id: "claude-3-5-sonnet@20241022", name: "Claude 3.5 Sonnet (Vertex)" },
-    // Meta Llama (modelFamily: "openai")
-    { id: "meta/llama-4-maverick-17b-128e-instruct-maas", name: "Llama 4 Maverick (Vertex)" },
-    { id: "meta/llama-3.3-70b-instruct-maas", name: "Llama 3.3 70B (Vertex)" },
-    // Mistral (modelFamily: "openai")
-    { id: "mistral-large@2411", name: "Mistral Large (Vertex)" },
-    { id: "mistral-nemo@2407", name: "Mistral Nemo (Vertex)" },
+    { id: "deepseek-ai/deepseek-v3.2-maas", name: "DeepSeek V3.2" },
+    { id: "qwen/qwen3-next-80b-a3b-instruct-maas", name: "Qwen3 Next 80B instruct" },
+    { id: "qwen/qwen3-next-80b-a3b-thinking-maas", name: "Qwen3 Next 80B thinking" },
     // Zhipu GLM (modelFamily: "openai")
     { id: "zai-org/glm-5-maas", name: "GLM-5 (Vertex)" },
   ],
