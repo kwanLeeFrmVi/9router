@@ -125,17 +125,23 @@ export class VertexExecutor extends BaseExecutor {
 
     const saJson = parseSaJson(credentials?.apiKey);
     if (saJson) {
+      // Service Account JSON → mint a short-lived OAuth Bearer token
       const token = await mintVertexToken(saJson);
       headers["Authorization"] = `Bearer ${token}`;
-    } else if (credentials?.apiKey) {
-      // Raw tokens are already appended as ?key= in buildUrl, but we can also provide Bearer 
-      // just in case the endpoint prefers it (Google APIs accept both safely).
-      headers["Authorization"] = `Bearer ${credentials.apiKey}`;
     }
+    // Raw API key: already appended as ?key= in buildUrl.
+    // Do NOT set Authorization header — Google's global endpoint rejects
+    // raw keys as Bearer tokens and returns 401.
 
     if (stream) headers["Accept"] = "text/event-stream";
 
     return headers;
+  }
+
+  // No-op: Vertex uses short-lived tokens minted per-request (SA JSON) or static ?key=.
+  // Returning null prevents chatCore.js from entering the 3-retry refreshWithRetry loop on 401.
+  async refreshCredentials(_credentials, _log) {
+    return null;
   }
 
   // Override execute to handle async auth token minting
