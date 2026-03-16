@@ -1816,7 +1816,8 @@ function EditConnectionModal({ isOpen, connection, proxyPools, onSave, onClose }
     priority: 1,
     apiKey: "",
     region: "us-central1",
-    modelFamily: "openai"
+    modelFamily: "openai",
+    projectId: "",
   });
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
@@ -1832,6 +1833,7 @@ function EditConnectionModal({ isOpen, connection, proxyPools, onSave, onClose }
         apiKey: "",
         region: connection.providerSpecificData?.region || "us-central1",
         modelFamily: connection.providerSpecificData?.modelFamily || "openai",
+        projectId: connection.providerSpecificData?.projectId || "",
       });
       setTestResult(null);
       setValidationResult(null);
@@ -1886,6 +1888,14 @@ function EditConnectionModal({ isOpen, connection, proxyPools, onSave, onClose }
           ...(connection.provider === "vertex-partner" ? { modelFamily: formData.modelFamily || "openai" } : {})
         };
       }
+
+      if (connection.provider === "gemini-cli") {
+        updates.providerSpecificData = {
+          ...(connection.providerSpecificData || {}),
+          projectId: formData.projectId || null,
+        };
+      }
+
       if (!isOAuth && formData.apiKey) {
         updates.apiKey = formData.apiKey;
         let isValid = validationResult === "success";
@@ -1932,6 +1942,7 @@ function EditConnectionModal({ isOpen, connection, proxyPools, onSave, onClose }
           value={formData.name}
           onChange={(e) => setFormData({ ...formData, name: e.target.value })}
           placeholder={isOAuth ? "Account name" : "Production Key"}
+          hint="Required. A friendly label for this connection."
         />
         {isOAuth && connection.email && (
           <div className="bg-sidebar/50 p-3 rounded-lg">
@@ -1963,7 +1974,15 @@ function EditConnectionModal({ isOpen, connection, proxyPools, onSave, onClose }
             options={[
               { value: "openai", label: "OpenAI Compatible (Default)" },
               { value: "anthropic", label: "Anthropic Compatible (Claude)" },
-            ]}
+            ]} />
+        )}
+        {connection.provider === "gemini-cli" && (
+          <Input
+            label="Project ID (Optional)"
+            value={formData.projectId}
+            onChange={(e) => setFormData({ ...formData, projectId: e.target.value })}
+            placeholder="my-google-cloud-project-id"
+            hint="Leave blank to use the default project quota."
           />
         )}
 

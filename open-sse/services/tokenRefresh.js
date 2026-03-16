@@ -101,7 +101,7 @@ export async function refreshClaudeOAuthToken(refreshToken, log) {
 /**
  * Specialized refresh for Google providers (Gemini, Antigravity)
  */
-export async function refreshGoogleToken(refreshToken, clientId, clientSecret, log) {
+export async function refreshGoogleToken(refreshToken, clientId, clientSecret, log, projectId = null) {
   try {
     const response = await fetch(OAUTH_ENDPOINTS.google.token, {
       method: "POST",
@@ -125,7 +125,18 @@ export async function refreshGoogleToken(refreshToken, clientId, clientSecret, l
 
     const tokens = await response.json();
     log?.info?.("TOKEN_REFRESH", "Successfully refreshed Google token", { hasNewAccessToken: !!tokens.access_token, expiresIn: tokens.expires_in });
-    return { accessToken: tokens.access_token, refreshToken: tokens.refresh_token || refreshToken, expiresIn: tokens.expires_in };
+
+    const result = {
+      accessToken: tokens.access_token,
+      refreshToken: tokens.refresh_token || refreshToken,
+      expiresIn: tokens.expires_in
+    };
+
+    if (projectId) {
+      result.projectId = projectId;
+    }
+
+    return result;
   } catch (error) {
     log?.error?.("TOKEN_REFRESH", `Network error refreshing Google token: ${error.message}`);
     return null;
@@ -191,42 +202,42 @@ export async function refreshQwenToken(refreshToken, log) {
  */
 export async function refreshCodexToken(refreshToken, log) {
   try {
-  const response = await fetch(OAUTH_ENDPOINTS.openai.token, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      Accept: "application/json",
-    },
-    body: new URLSearchParams({
-      grant_type: "refresh_token",
-      refresh_token: refreshToken,
-      client_id: PROVIDERS.codex.clientId,
-      scope: "openid profile email offline_access",
-    }),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    log?.error?.("TOKEN_REFRESH", "Failed to refresh Codex token", {
-      status: response.status,
-      error: errorText,
+    const response = await fetch(OAUTH_ENDPOINTS.openai.token, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "application/json",
+      },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: refreshToken,
+        client_id: PROVIDERS.codex.clientId,
+        scope: "openid profile email offline_access",
+      }),
     });
-    return null;
-  }
 
-  const tokens = await response.json();
+    if (!response.ok) {
+      const errorText = await response.text();
+      log?.error?.("TOKEN_REFRESH", "Failed to refresh Codex token", {
+        status: response.status,
+        error: errorText,
+      });
+      return null;
+    }
 
-  log?.info?.("TOKEN_REFRESH", "Successfully refreshed Codex token", {
-    hasNewAccessToken: !!tokens.access_token,
-    hasNewRefreshToken: !!tokens.refresh_token,
-    expiresIn: tokens.expires_in,
-  });
+    const tokens = await response.json();
 
-  return {
-    accessToken: tokens.access_token,
-    refreshToken: tokens.refresh_token || refreshToken,
-    expiresIn: tokens.expires_in,
-  };
+    log?.info?.("TOKEN_REFRESH", "Successfully refreshed Codex token", {
+      hasNewAccessToken: !!tokens.access_token,
+      hasNewRefreshToken: !!tokens.refresh_token,
+      expiresIn: tokens.expires_in,
+    });
+
+    return {
+      accessToken: tokens.access_token,
+      refreshToken: tokens.refresh_token || refreshToken,
+      expiresIn: tokens.expires_in,
+    };
   } catch (error) {
     log?.error?.("TOKEN_REFRESH", `Network error refreshing Codex token: ${error.message}`);
     return null;
@@ -472,7 +483,8 @@ export async function getAccessToken(provider, credentials, log) {
         credentials.refreshToken,
         PROVIDERS[provider].clientId,
         PROVIDERS[provider].clientSecret,
-        log
+        log,
+        credentials.projectId
       );
 
     case "claude":
@@ -523,7 +535,8 @@ export async function refreshTokenByProvider(provider, credentials, log) {
         credentials.refreshToken,
         PROVIDERS[provider].clientId,
         PROVIDERS[provider].clientSecret,
-        log
+        log,
+        credentials.projectId
       );
     case "claude":
       return refreshClaudeOAuthToken(credentials.refreshToken, log);

@@ -340,7 +340,12 @@ export async function GET(request, { params }) {
 
         // Attempt refresh on 401/403 when refresh token exists
         if (!response.ok && (response.status === 401 || response.status === 403) && refreshToken) {
-          const refreshed = await refreshGoogleToken(refreshToken, GEMINI_CONFIG.clientId, GEMINI_CONFIG.clientSecret);
+          const refreshed = await refreshGoogleToken(
+            refreshToken,
+            GEMINI_CONFIG.clientId,
+            GEMINI_CONFIG.clientSecret,
+            projectId
+          );
           if (refreshed?.accessToken) {
             await updateProviderCredentials(connection.id, {
               accessToken: refreshed.accessToken,

@@ -33,8 +33,8 @@ export const refreshAccessToken = (provider, refreshToken, credentials) =>
 export const refreshClaudeOAuthToken = (refreshToken) =>
   _refreshClaudeOAuthToken(refreshToken, log);
 
-export const refreshGoogleToken = (refreshToken, clientId, clientSecret) =>
-  _refreshGoogleToken(refreshToken, clientId, clientSecret, log);
+export const refreshGoogleToken = (refreshToken, clientId, clientSecret, projectId) =>
+  _refreshGoogleToken(refreshToken, clientId, clientSecret, log, projectId);
 
 export const refreshQwenToken = (refreshToken) =>
   _refreshQwenToken(refreshToken, log);
