@@ -115,14 +115,6 @@ function openaiToGeminiBase(model, body, stream) {
       } else if (role === "assistant") {
         const parts = [];
 
-        // Thinking/reasoning → thought part
-        if (msg.reasoning_content) {
-          parts.push({
-            thought: true,
-            text: msg.reasoning_content
-          });
-        }
-
         if (content) {
           const text = typeof content === "string" ? content : extractTextContent(content);
           if (text) {
