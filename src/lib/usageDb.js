@@ -92,6 +92,140 @@ if (!global._statsEmitter) {
 }
 export const statsEmitter = global._statsEmitter;
 
+// Async cost calculation queue to avoid DB lock contention
+// Entries are queued and processed in batches
+if (!global._costQueue) {
+  global._costQueue = {
+    pending: [],
+    processing: false,
+    flushInterval: null,
+  };
+}
+const costQueue = global._costQueue;
+
+const COST_QUEUE_BATCH_INTERVAL_MS = 5000; // Process every 5 seconds
+const COST_QUEUE_MAX_BATCH = 50; // Max entries per batch
+
+/**
+ * Process pending cost calculations in a batch
+ * Uses cached pricing to avoid DB locks
+ */
+async function processCostQueue() {
+  if (costQueue.processing || costQueue.pending.length === 0) return;
+
+  costQueue.processing = true;
+  const batch = costQueue.pending.splice(0, COST_QUEUE_MAX_BATCH);
+
+  try {
+    const { getPricingForModel } = await import("@/lib/localDb.js");
+
+    // Calculate costs for all entries in batch (uses cached pricing)
+    for (const entry of batch) {
+      try {
+        const pricing = await getPricingForModel(entry.provider, entry.model);
+        if (pricing && entry.tokens) {
+          const inputTokens = entry.tokens.prompt_tokens || entry.tokens.input_tokens || 0;
+          const cachedTokens = entry.tokens.cached_tokens || entry.tokens.cache_read_input_tokens || 0;
+          const nonCachedInput = Math.max(0, inputTokens - cachedTokens);
+
+          let cost = 0;
+          cost += nonCachedInput * (pricing.input / 1000000);
+
+          if (cachedTokens > 0) {
+            const cachedRate = pricing.cached || pricing.input;
+            cost += cachedTokens * (cachedRate / 1000000);
+          }
+
+          const outputTokens = entry.tokens.completion_tokens || entry.tokens.output_tokens || 0;
+          cost += outputTokens * (pricing.output / 1000000);
+
+          const reasoningTokens = entry.tokens.reasoning_tokens || 0;
+          if (reasoningTokens > 0) {
+            const reasoningRate = pricing.reasoning || pricing.output;
+            cost += reasoningTokens * (reasoningRate / 1000000);
+          }
+
+          const cacheCreationTokens = entry.tokens.cache_creation_input_tokens || 0;
+          if (cacheCreationTokens > 0) {
+            const cacheCreationRate = pricing.cache_creation || pricing.input;
+            cost += cacheCreationTokens * (cacheCreationRate / 1000000);
+          }
+
+          entry.cost = cost;
+        } else {
+          entry.cost = 0;
+        }
+      } catch (err) {
+        console.error("[CostQueue] Error calculating cost for entry:", err.message);
+        entry.cost = 0;
+      }
+    }
+
+    // Update entries in usage.json with calculated costs
+    const db = await getUsageDb();
+    await db.read();
+
+    for (const entry of batch) {
+      // Find the entry in history by timestamp + model + provider
+      const idx = db.data.history.findIndex(
+        h => h.timestamp === entry.timestamp &&
+          h.model === entry.model &&
+          h.provider === entry.provider
+      );
+      if (idx !== -1) {
+        db.data.history[idx].cost = entry.cost;
+      }
+    }
+
+    await db.write();
+    statsEmitter.emit("update");
+  } catch (error) {
+    console.error("[CostQueue] Batch processing error:", error.message);
+  } finally {
+    costQueue.processing = false;
+
+    // Schedule next batch if more entries pending
+    if (costQueue.pending.length > 0) {
+      setTimeout(processCostQueue, 100);
+    }
+  }
+}
+
+/**
+ * Start the cost queue flush interval
+ */
+function startCostQueueProcessor() {
+  if (costQueue.flushInterval) return;
+
+  costQueue.flushInterval = setInterval(() => {
+    if (costQueue.pending.length > 0) {
+      processCostQueue();
+    }
+  }, COST_QUEUE_BATCH_INTERVAL_MS);
+
+  // Prevent interval from keeping process alive
+  if (costQueue.flushInterval.unref) {
+    costQueue.flushInterval.unref();
+  }
+}
+
+// Auto-start on module load (non-cloud only)
+if (!isCloud) {
+  startCostQueueProcessor();
+}
+
+/**
+ * Flush remaining cost queue entries (call on graceful shutdown)
+ */
+export async function flushCostQueue() {
+  if (costQueue.pending.length === 0) return;
+
+  // Process all remaining entries synchronously
+  while (costQueue.pending.length > 0) {
+    await processCostQueue();
+  }
+}
+
 /**
  * Track a pending request
  * @param {string} model
@@ -140,7 +274,7 @@ export async function getActiveRequests() {
     for (const conn of allConnections) {
       connectionMap[conn.id] = conn.name || conn.email || conn.id;
     }
-  } catch {}
+  } catch { }
 
   for (const [connectionId, models] of Object.entries(pendingRequests.byAccount)) {
     for (const [modelKey, count] of Object.entries(models)) {
@@ -190,7 +324,7 @@ export async function getUsageDb() {
   if (isCloud) {
     // Return in-memory DB for Workers
     if (!dbInstance) {
-      dbInstance = new Low({ read: async () => {}, write: async () => {} }, defaultData);
+      dbInstance = new Low({ read: async () => { }, write: async () => { } }, defaultData);
       dbInstance.data = defaultData;
     }
     return dbInstance;
@@ -225,6 +359,9 @@ export async function getUsageDb() {
 /**
  * Save request usage
  * @param {object} entry - Usage entry { provider, model, tokens: { prompt_tokens, completion_tokens, ... }, connectionId?, apiKey? }
+ *
+ * Cost is calculated asynchronously to avoid DB lock contention.
+ * Entry is saved immediately with cost=null, then updated by background worker.
  */
 export async function saveRequestUsage(entry) {
   if (isCloud) return; // Skip saving in Workers
@@ -245,8 +382,8 @@ export async function saveRequestUsage(entry) {
       db.data.totalRequestsLifetime = db.data.history.length;
     }
 
-    const entryCost = await calculateCost(entry.provider, entry.model, entry.tokens);
-    entry.cost = entryCost;
+    // Save entry immediately with cost=null (calculated async)
+    entry.cost = null;
     db.data.history.push(entry);
     db.data.totalRequestsLifetime += 1;
 
@@ -258,6 +395,9 @@ export async function saveRequestUsage(entry) {
 
     await db.write();
     statsEmitter.emit("update");
+
+    // Queue for async cost calculation (non-blocking)
+    costQueue.pending.push({ ...entry });
   } catch (error) {
     console.error("Failed to save usage stats:", error);
   }
@@ -328,7 +468,7 @@ export async function appendRequestLog({ model, provider, connectionId, tokens, 
       if (conn) {
         account = conn.name || conn.email || account;
       }
-    } catch {}
+    } catch { }
 
     const sent = tokens?.prompt_tokens !== undefined ? tokens.prompt_tokens : "-";
     const received = tokens?.completion_tokens !== undefined ? tokens.completion_tokens : "-";
@@ -353,23 +493,23 @@ export async function appendRequestLog({ model, provider, connectionId, tokens, 
  */
 export async function getRecentLogs(limit = 200) {
   if (isCloud) return []; // Skip in Workers
-  
+
   // Runtime check: ensure fs module is available
   if (!fs || typeof fs.existsSync !== "function") {
     console.error("[usageDb] fs module not available in this environment");
     return [];
   }
-  
+
   if (!LOG_FILE) {
     console.error("[usageDb] LOG_FILE path not defined");
     return [];
   }
-  
+
   if (!fs.existsSync(LOG_FILE)) {
     console.log(`[usageDb] Log file does not exist: ${LOG_FILE}`);
     return [];
   }
-  
+
   try {
     const content = fs.readFileSync(LOG_FILE, "utf-8");
     const lines = content.trim().split("\n");
@@ -478,7 +618,7 @@ export async function getUsageStats(period = "all") {
     for (const node of nodes) {
       if (node.id && node.name) providerNodeNameMap[node.id] = node.name;
     }
-  } catch {}
+  } catch { }
 
   // Fetch all API keys to get key names
   let allApiKeys = [];

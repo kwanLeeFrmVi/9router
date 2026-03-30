@@ -1074,51 +1074,114 @@ export async function getCloudUrl() {
 
 // ============ Pricing ============
 
+// In-memory pricing cache with TTL to avoid DB lock contention
+// Cache is shared across Next.js route modules via global
+const PRICING_CACHE_TTL_MS = 60000; // 60 seconds
+
+if (!global._pricingCache) {
+  global._pricingCache = {
+    data: null,
+    timestamp: 0,
+    userPricingHash: null,
+    defaultPricingHash: null,
+    isRefreshing: false,
+    refreshPromise: null,
+  };
+}
+const pricingCache = global._pricingCache;
+
+// Simple hash for detecting changes
+function hashObject(obj) {
+  if (!obj) return "null";
+  const keys = Object.keys(obj).sort();
+  return keys.length + ":" + keys.slice(0, 10).join(",");
+}
+
+/**
+ * Invalidate pricing cache (call after pricing updates)
+ */
+export function invalidatePricingCache() {
+  pricingCache.data = null;
+  pricingCache.timestamp = 0;
+  pricingCache.userPricingHash = null;
+}
+
 /**
  * Get pricing configuration
  * Returns merged user pricing with defaults
+ * Uses in-memory cache to avoid DB lock contention
  */
 export async function getPricing() {
-  const db = await getDb();
-  const userPricing = db.data.pricing || {};
+  const now = Date.now();
+  const cacheAge = now - pricingCache.timestamp;
 
-  // Import default pricing
-  const { getDefaultPricing } = await import("@/shared/constants/pricing.js");
-  const defaultPricing = getDefaultPricing();
+  // Return cached data if fresh
+  if (pricingCache.data && cacheAge < PRICING_CACHE_TTL_MS) {
+    return pricingCache.data;
+  }
 
-  // Merge user pricing with defaults
-  // User pricing overrides defaults for specific provider/model combinations
-  const mergedPricing = {};
+  // If already refreshing, wait for that promise
+  if (pricingCache.isRefreshing && pricingCache.refreshPromise) {
+    return pricingCache.refreshPromise;
+  }
 
-  for (const [provider, models] of Object.entries(defaultPricing)) {
-    mergedPricing[provider] = { ...models };
+  // Start refresh
+  pricingCache.isRefreshing = true;
+  pricingCache.refreshPromise = (async () => {
+    try {
+      const db = await getDb();
+      const userPricing = db.data.pricing || {};
 
-    // Apply user overrides if they exist
-    if (userPricing[provider]) {
-      for (const [model, pricing] of Object.entries(userPricing[provider])) {
-        if (mergedPricing[provider][model]) {
-          mergedPricing[provider][model] = { ...mergedPricing[provider][model], ...pricing };
+      // Import default pricing
+      const { getDefaultPricing } = await import("@/shared/constants/pricing.js");
+      const defaultPricing = getDefaultPricing();
+
+      // Merge user pricing with defaults
+      // User pricing overrides defaults for specific provider/model combinations
+      const mergedPricing = {};
+
+      for (const [provider, models] of Object.entries(defaultPricing)) {
+        mergedPricing[provider] = { ...models };
+
+        // Apply user overrides if they exist
+        if (userPricing[provider]) {
+          for (const [model, pricing] of Object.entries(userPricing[provider])) {
+            if (mergedPricing[provider][model]) {
+              mergedPricing[provider][model] = { ...mergedPricing[provider][model], ...pricing };
+            } else {
+              mergedPricing[provider][model] = pricing;
+            }
+          }
+        }
+      }
+
+      // Add any user-only pricing entries
+      for (const [provider, models] of Object.entries(userPricing)) {
+        if (!mergedPricing[provider]) {
+          mergedPricing[provider] = { ...models };
         } else {
-          mergedPricing[provider][model] = pricing;
+          for (const [model, pricing] of Object.entries(models)) {
+            if (!mergedPricing[provider][model]) {
+              mergedPricing[provider][model] = pricing;
+            }
+          }
         }
       }
-    }
-  }
 
-  // Add any user-only pricing entries
-  for (const [provider, models] of Object.entries(userPricing)) {
-    if (!mergedPricing[provider]) {
-      mergedPricing[provider] = { ...models };
-    } else {
-      for (const [model, pricing] of Object.entries(models)) {
-        if (!mergedPricing[provider][model]) {
-          mergedPricing[provider][model] = pricing;
-        }
-      }
-    }
-  }
+      // Update cache
+      pricingCache.data = mergedPricing;
+      pricingCache.timestamp = Date.now();
+      pricingCache.userPricingHash = hashObject(userPricing);
+      pricingCache.defaultPricingHash = hashObject(defaultPricing);
 
-  return mergedPricing;
+      return mergedPricing;
+    } finally {
+      pricingCache.isRefreshing = false;
+      pricingCache.refreshPromise = null;
+    }
+  })();
+
+  return pricingCache.refreshPromise;
 }
 
 /**
@@ -1189,6 +1252,7 @@ export async function updatePricing(pricingData) {
   }
 
   await safeWrite(db);
+  invalidatePricingCache();
   return db.data.pricing;
 }
 
@@ -1219,6 +1283,7 @@ export async function resetPricing(provider, model) {
   }
 
   await safeWrite(db);
+  invalidatePricingCache();
   return db.data.pricing;
 }
 
@@ -1229,5 +1294,6 @@ export async function resetAllPricing() {
   const db = await getDb();
   db.data.pricing = {};
   await safeWrite(db);
+  invalidatePricingCache();
   return db.data.pricing;
 }
