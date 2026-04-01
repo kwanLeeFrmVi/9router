@@ -307,6 +307,11 @@ export function createResponsesApiTransformStream(logger = null) {
 
         // Handle text content (may contain <think> tags)
         if (delta.content) {
+          // Close reasoning if we had reasoning_content and now have content
+          if (state.reasoningId && !state.reasoningDone) {
+            closeReasoning(controller);
+          }
+          
           let content = delta.content;
 
           if (content.includes("<think>")) {
