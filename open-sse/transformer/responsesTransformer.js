@@ -18,7 +18,7 @@ export function createResponsesLogger(model, logsDir = null) {
   const uniqueId = Math.random().toString(36).slice(2, 8);
   const baseDir = logsDir || (typeof process !== "undefined" ? process.cwd() : ".");
   const logDir = path.join(baseDir, "logs", `responses_${model}_${timestamp}_${uniqueId}`);
-  
+
   try {
     fs.mkdirSync(logDir, { recursive: true });
   } catch {
@@ -78,7 +78,7 @@ export function createResponsesApiTransformStream(logger = null) {
 
   const encoder = new TextEncoder();
   const nextSeq = () => ++state.seq;
-  
+
   const emit = (controller, eventType, data) => {
     data.sequence_number = nextSeq();
     const output = `event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -91,7 +91,7 @@ export function createResponsesApiTransformStream(logger = null) {
     if (!state.reasoningId) {
       state.reasoningId = `rs_${state.responseId}_${idx}`;
       state.reasoningIndex = idx;
-      
+
       emit(controller, "response.output_item.added", {
         type: "response.output_item.added",
         output_index: idx,
@@ -128,7 +128,7 @@ export function createResponsesApiTransformStream(logger = null) {
   const closeReasoning = (controller) => {
     if (state.reasoningId && !state.reasoningDone) {
       state.reasoningDone = true;
-      
+
       emit(controller, "response.reasoning_summary_text.done", {
         type: "response.reasoning_summary_text.done",
         item_id: state.reasoningId,
@@ -197,7 +197,7 @@ export function createResponsesApiTransformStream(logger = null) {
     const callId = state.funcCallIds[idx];
     if (callId && !state.funcItemDone[idx]) {
       const args = state.funcArgsBuf[idx] || "{}";
-      
+
       emit(controller, "response.function_call_arguments.done", {
         type: "response.function_call_arguments.done",
         item_id: `fc_${callId}`,
@@ -265,7 +265,7 @@ export function createResponsesApiTransformStream(logger = null) {
         }
 
         if (!parsed.choices?.length) continue;
-        
+
         const choice = parsed.choices[0];
         const idx = choice.index || 0;
         const delta = choice.delta || {};
@@ -274,7 +274,7 @@ export function createResponsesApiTransformStream(logger = null) {
         if (!state.started) {
           state.started = true;
           state.responseId = parsed.id ? `resp_${parsed.id}` : state.responseId;
-          
+
           emit(controller, "response.created", {
             type: "response.created",
             response: {
@@ -311,7 +311,7 @@ export function createResponsesApiTransformStream(logger = null) {
           if (state.reasoningId && !state.reasoningDone) {
             closeReasoning(controller);
           }
-          
+
           let content = delta.content;
 
           if (content.includes("<think>")) {
@@ -324,7 +324,7 @@ export function createResponsesApiTransformStream(logger = null) {
             const parts = content.split("</think>");
             const thinkPart = parts[0];
             const textPart = parts.slice(1).join("</think>");
-            
+
             if (thinkPart) emitReasoningDelta(controller, thinkPart);
             closeReasoning(controller);
             state.inThinking = false;
@@ -338,24 +338,27 @@ export function createResponsesApiTransformStream(logger = null) {
 
           // Regular text content
           if (content) {
-            if (!state.msgItemAdded[idx]) {
-              state.msgItemAdded[idx] = true;
-              const msgId = `msg_${state.responseId}_${idx}`;
-              
+            // Use different output_index if reasoning was emitted
+            const msgIdx = state.reasoningId ? state.reasoningIndex + 1 : idx;
+
+            if (!state.msgItemAdded[msgIdx]) {
+              state.msgItemAdded[msgIdx] = true;
+              const msgId = `msg_${state.responseId}_${msgIdx}`;
+
               emit(controller, "response.output_item.added", {
                 type: "response.output_item.added",
-                output_index: idx,
+                output_index: msgIdx,
                 item: { id: msgId, type: "message", content: [], role: "assistant" }
               });
             }
 
-            if (!state.msgContentAdded[idx]) {
-              state.msgContentAdded[idx] = true;
-              
+            if (!state.msgContentAdded[msgIdx]) {
+              state.msgContentAdded[msgIdx] = true;
+
               emit(controller, "response.content_part.added", {
                 type: "response.content_part.added",
-                item_id: `msg_${state.responseId}_${idx}`,
-                output_index: idx,
+                item_id: `msg_${state.responseId}_${msgIdx}`,
+                output_index: msgIdx,
                 content_index: 0,
                 part: { type: "output_text", annotations: [], logprobs: [], text: "" }
               });
@@ -363,21 +366,23 @@ export function createResponsesApiTransformStream(logger = null) {
 
             emit(controller, "response.output_text.delta", {
               type: "response.output_text.delta",
-              item_id: `msg_${state.responseId}_${idx}`,
-              output_index: idx,
+              item_id: `msg_${state.responseId}_${msgIdx}`,
+              output_index: msgIdx,
               content_index: 0,
               delta: content,
               logprobs: []
             });
 
-            if (!state.msgTextBuf[idx]) state.msgTextBuf[idx] = "";
-            state.msgTextBuf[idx] += content;
+            if (!state.msgTextBuf[msgIdx]) state.msgTextBuf[msgIdx] = "";
+            state.msgTextBuf[msgIdx] += content;
           }
         }
 
         // Handle tool_calls
         if (delta.tool_calls) {
-          closeMessage(controller, idx);
+          // Use correct msgIdx if reasoning was emitted
+          const msgIdx = state.reasoningId ? state.reasoningIndex + 1 : idx;
+          closeMessage(controller, msgIdx);
 
           for (const tc of delta.tool_calls) {
             const tcIdx = tc.index ?? 0;
@@ -388,7 +393,7 @@ export function createResponsesApiTransformStream(logger = null) {
 
             if (!state.funcCallIds[tcIdx] && newCallId) {
               state.funcCallIds[tcIdx] = newCallId;
-              
+
               emit(controller, "response.output_item.added", {
                 type: "response.output_item.added",
                 output_index: tcIdx,
