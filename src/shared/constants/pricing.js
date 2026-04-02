@@ -107,6 +107,7 @@ export const MODEL_PRICING = {
   "gpt-oss-120b-medium":          { input: 0.50,  output: 2.00,  cached: 0.25,  reasoning: 3.00,   cache_creation: 0.50  },
   "vision-model":                 { input: 1.50,  output: 6.00,  cached: 0.75,  reasoning: 9.00,   cache_creation: 1.50  },
   "coder-model":                  { input: 1.50,  output: 6.00,  cached: 0.75,  reasoning: 9.00,   cache_creation: 1.50  },
+  "zai-org/glm-5-maas": { input: 1.00, output: 3.20, cached: 0.10, reasoning: 4.80, cache_creation: 1.00 },
 };
 
 /**
