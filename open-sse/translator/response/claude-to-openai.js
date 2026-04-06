@@ -16,6 +16,19 @@ function createChunk(state, delta, finishReason = null) {
   };
 }
 
+/**
+ * Strip <think> and </think> thinking tags from text content.
+ * Some providers send thinking delimiters as text rather than as separate thinking_delta events.
+ */
+function stripThinkingTags(text) {
+  if (!text) return text;
+  // Strip opening <think> tag
+  text = text.replace(/\s*<think>\s*/g, "");
+  // Strip closing </think> tag (with optional whitespace/newlines)
+  text = text.replace(/\s*<\/think>\s*/g, "");
+  return text;
+}
+
 // Convert Claude stream chunk to OpenAI format
 export function claudeToOpenAIResponse(chunk, state) {
   if (!chunk) return null;
@@ -44,7 +57,7 @@ export function claudeToOpenAIResponse(chunk, state) {
       } else if (block?.type === "thinking") {
         state.inThinkingBlock = true;
         state.currentBlockIndex = chunk.index;
-        results.push(createChunk(state, { content: "<think>" }));
+        // Don't emit <think> as text — let thinking_delta events carry reasoning_content
       } else if (block?.type === "tool_use") {
         const toolCallIndex = state.toolCallIndex++;
         // Restore original tool name from mapping (Claude OAuth)
@@ -69,7 +82,13 @@ export function claudeToOpenAIResponse(chunk, state) {
       if (chunk.index === state.serverToolBlockIndex) break;
       const delta = chunk.delta;
       if (delta?.type === "text_delta" && delta.text) {
-        results.push(createChunk(state, { content: delta.text }));
+        let text = delta.text;
+        // Strip thinking tags that may appear in text deltas (some providers send thinking
+        // delimiters as text rather than as separate thinking_delta events)
+        text = stripThinkingTags(text);
+        if (text) {
+          results.push(createChunk(state, { content: text }));
+        }
       } else if (delta?.type === "thinking_delta" && delta.thinking) {
         results.push(createChunk(state, { reasoning_content: delta.thinking }));
       } else if (delta?.type === "input_json_delta" && delta.partial_json) {
@@ -94,8 +113,8 @@ export function claudeToOpenAIResponse(chunk, state) {
         state.serverToolBlockIndex = -1;
         break;
       }
+      // Don't emit </think> as text — text deltas now handle stripping thinking tags
       if (state.inThinkingBlock && chunk.index === state.currentBlockIndex) {
-        results.push(createChunk(state, { content: "</think>" }));
         state.inThinkingBlock = false;
       }
       state.textBlockStarted = false;

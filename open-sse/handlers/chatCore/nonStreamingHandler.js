@@ -133,8 +133,17 @@ export async function handleNonStreamingResponse({ providerResponse, provider, m
   let responseBody;
 
   if (contentType.includes("text/event-stream")) {
-    const sseText = await providerResponse.text();
-    const parsed = parseSSEToOpenAIResponse(sseText, model);
+    let sseText = await providerResponse.text();
+    // Strip trailing "data: [DONE]" from SSE body (some providers append it even for non-streaming)
+    sseText = sseText.replace(/\n?data:\s*\[DONE\]\s*$/g, "");
+    // Also strip leading "data: " prefix if the text starts with raw JSON (Claude non-streaming as SSE)
+    sseText = sseText.replace(/^data:\s*/, "");
+    let parsed;
+    try {
+      parsed = JSON.parse(sseText);
+    } catch {
+      parsed = parseSSEToOpenAIResponse(sseText, model);
+    }
     if (!parsed) {
       appendLog({ status: `FAILED ${HTTP_STATUS.BAD_GATEWAY}` });
       return createErrorResult(HTTP_STATUS.BAD_GATEWAY, "Invalid SSE response for non-streaming request");
@@ -159,7 +168,55 @@ export async function handleNonStreamingResponse({ providerResponse, provider, m
 
   const translatedResponse = needsTranslation(targetFormat, sourceFormat)
     ? translateNonStreamingResponse(responseBody, targetFormat, sourceFormat)
-    : responseBody;
+    : (sourceFormat === FORMATS.CLAUDE
+      ? translateNonStreamingResponse(responseBody, FORMATS.OPENAI, sourceFormat)
+      : responseBody);
+
+  // Ensure OpenAI format: wrap Claude body (type="message") in choices structure
+  if (translatedResponse?.type === "message" && !translatedResponse?.choices) {
+    const raw = responseBody;
+    let textContent = "", thinkingContent = "";
+    const toolCalls = [];
+
+    if (Array.isArray(raw.content)) {
+      for (const block of raw.content) {
+        if (block.type === "text" && block.text) textContent += block.text;
+        else if (block.type === "thinking" && block.thinking) thinkingContent += block.thinking;
+        else if (block.type === "tool_use") {
+          toolCalls.push({ id: block.id, type: "function", function: { name: block.name, arguments: JSON.stringify(block.input || {}) } });
+        }
+      }
+    }
+
+    const message = { role: "assistant" };
+    if (textContent) message.content = textContent;
+    if (thinkingContent) message.reasoning_content = thinkingContent;
+    if (toolCalls.length > 0) message.tool_calls = toolCalls;
+    if (!message.content && !message.tool_calls) message.content = "";
+
+    let finishReason = raw.stop_reason || "stop";
+    if (finishReason === "end_turn") finishReason = "stop";
+    if (finishReason === "tool_use") finishReason = "tool_calls";
+
+    translatedResponse.id = raw.id || `chatcmpl-${Date.now()}`;
+    translatedResponse.object = "chat.completion";
+    translatedResponse.created = Math.floor(Date.now() / 1000);
+    translatedResponse.model = raw.model || model;
+    translatedResponse.choices = [{ index: 0, message, finish_reason: finishReason }];
+    if (raw.usage) {
+      translatedResponse.usage = {
+        prompt_tokens: raw.usage.input_tokens || 0,
+        completion_tokens: raw.usage.output_tokens || 0,
+        total_tokens: (raw.usage.input_tokens || 0) + (raw.usage.output_tokens || 0)
+      };
+    }
+    // Remove Claude-specific fields
+    delete translatedResponse.type;
+    delete translatedResponse.content;
+    delete translatedResponse.role;
+    delete translatedResponse.stop_reason;
+    delete translatedResponse.base_resp;
+  }
 
   // Fix finish_reason for tool_calls: some providers return non-standard values (e.g. "other")
   if (translatedResponse?.choices?.[0]) {

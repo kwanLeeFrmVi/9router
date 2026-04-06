@@ -209,6 +209,16 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     if (result) { streamController.handleComplete(); return result; }
   }
 
+  // Claude SSE response for non-streaming request (body.stream=false but got SSE)
+  // Intercept the SSE stream and convert to JSON for the client
+  if (!stream && !providerRequiresStreaming) {
+    const contentType = providerResponse.headers.get("content-type") || "";
+    if (contentType.includes("text/event-stream")) {
+      const result = await handleForcedSSEToJson({ ...sharedCtx, providerResponse, sourceFormat, trackDone, appendLog });
+      if (result) { streamController.handleComplete(); return result; }
+    }
+  }
+
   // True non-streaming response
   if (!stream) {
     const result = await handleNonStreamingResponse({ ...sharedCtx, providerResponse, sourceFormat, targetFormat, reqLogger, trackDone, appendLog });

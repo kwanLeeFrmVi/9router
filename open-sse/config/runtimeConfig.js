@@ -59,6 +59,7 @@ export const MEMORY_CONFIG = {
 // Default token limits
 export const DEFAULT_MAX_TOKENS = 64000;
 export const DEFAULT_MIN_TOKENS = 32000;
+export const DEFAULT_BUDGET_TOKENS = 10000;
 
 // Retry config for 429 responses (legacy - kept for backward compatibility)
 export const RETRY_CONFIG = {
