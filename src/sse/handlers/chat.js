@@ -8,7 +8,7 @@ import {
   isValidApiKey,
 } from "../services/auth.js";
 import { cacheClaudeHeaders } from "open-sse/utils/claudeHeaderCache.js";
-import { getSettings } from "@/lib/localDb";
+import { getSettings, getApiKeyByKey } from "@/lib/localDb";
 import { getModelInfo, getComboModels } from "../services/model.js";
 import { handleChatCore } from "open-sse/handlers/chatCore.js";
 import { errorResponse, unavailableResponse } from "open-sse/utils/error.js";
@@ -54,12 +54,14 @@ export async function handleChat(request, clientRawRequest = null) {
   const effort = body.reasoning_effort || body.reasoning?.effort || null;
   log.request("POST", `${url.pathname} | ${modelStr} | ${msgCount} msgs${toolCount ? ` | ${toolCount} tools` : ""}${effort ? ` | effort=${effort}` : ""}`);
 
-  // Log API key (masked)
+  // Log API key (masked) with name
   const authHeader = request.headers.get("Authorization");
   const apiKey = extractApiKey(request);
   if (authHeader && apiKey) {
     const masked = log.maskKey(apiKey);
-    log.debug("AUTH", `API Key: ${masked}`);
+    const keyRecord = await getApiKeyByKey(apiKey);
+    const keyName = keyRecord?.name || "unnamed";
+    log.debug("AUTH", `API Key: ${masked} (${keyName})`);
   } else {
     log.debug("AUTH", "No API key provided (local mode)");
   }

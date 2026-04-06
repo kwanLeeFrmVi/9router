@@ -963,6 +963,14 @@ export async function validateApiKey(key) {
   return found && found.isActive !== false;
 }
 
+/**
+ * Get API key by the key value (returns full record including name)
+ */
+export async function getApiKeyByKey(key) {
+  const db = await getDb();
+  return db.data.apiKeys.find(k => k.key === key) || null;
+}
+
 // ============ Data Cleanup ============
 
 /**
