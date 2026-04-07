@@ -4,12 +4,16 @@ import "open-sse/index.js";
 
 import { initTranslators } from "open-sse/translator/index.js";
 import { openDb } from "./db/index.ts";
+import { initConsoleLogCapture } from "./lib/consoleLogBuffer.ts";
 import { corsResponse } from "./lib/cors.ts";
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 // Initialize DB (creates tables, opens WAL connection)
 openDb();
+
+// Capture server-side console logs for the dashboard log panel
+initConsoleLogCapture();
 
 // Initialize translators once at boot
 await initTranslators();

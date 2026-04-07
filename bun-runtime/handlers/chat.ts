@@ -21,6 +21,7 @@ import { detectFormatByEndpoint } from "open-sse/translator/formats.js";
 import * as log from "../lib/logger.ts";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.ts";
 import { getProjectIdForConnection } from "open-sse/services/projectId.js";
+import { statsEmitter } from "../stubs/usageDb.ts";
 
 /**
  * Handle chat completion request.
@@ -189,6 +190,7 @@ async function handleSingleModelChat(
       },
       onRequestSuccess: async () => {
         await clearAccountError(creds.connectionId as string, creds, model);
+        statsEmitter.emit("usage", { provider, model, connectionId: creds.connectionId });
       },
     }) as { success: boolean; response: Response; status: number; error: string };
 

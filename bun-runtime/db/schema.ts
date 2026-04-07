@@ -60,6 +60,26 @@ export const CREATE_TABLES = `
     expires_at TEXT NOT NULL,
     created_at TEXT
   );
+
+  CREATE TABLE IF NOT EXISTS usage_log (
+    id                 TEXT PRIMARY KEY,
+    timestamp          TEXT NOT NULL,
+    endpoint           TEXT,
+    provider           TEXT,
+    model              TEXT,
+    connection_id      TEXT,
+    api_key_id         TEXT,
+    status             TEXT DEFAULT 'ok',
+    prompt_tokens      INTEGER DEFAULT 0,
+    completion_tokens  INTEGER DEFAULT 0,
+    reasoning_tokens   INTEGER DEFAULT 0,
+    cached_tokens      INTEGER DEFAULT 0,
+    cost               REAL DEFAULT 0,
+    duration_ms        INTEGER DEFAULT 0
+  );
+  CREATE INDEX IF NOT EXISTS idx_usage_ts       ON usage_log(timestamp);
+  CREATE INDEX IF NOT EXISTS idx_usage_provider ON usage_log(provider);
+  CREATE INDEX IF NOT EXISTS idx_usage_api_key  ON usage_log(api_key_id);
 `;
 
 // kv keys used
