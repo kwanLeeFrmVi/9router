@@ -46,6 +46,20 @@ export const CREATE_TABLES = `
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS users (
+    id            TEXT PRIMARY KEY,
+    username      TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    created_at    TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS sessions (
+    token      TEXT PRIMARY KEY,
+    user_id    TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    created_at TEXT
+  );
 `;
 
 // kv keys used

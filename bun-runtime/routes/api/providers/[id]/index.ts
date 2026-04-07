@@ -1,14 +1,14 @@
 
 
 import { getProviderConnectionById, updateProviderConnection, deleteProviderConnection } from "@/lib/localDb";
-import { checkAuth } from "lib/authMiddleware.ts";
+import { checkAdminAuth } from "lib/authMiddleware.ts";
 import { CORS_HEADERS } from "lib/cors.ts";
 import { register } from "lib/routeRegistry";
 
 type BunRequest = Request & { params: Record<string, string> };
 
 export async function GET(req: Request): Promise<Response> {
-  const auth = await checkAuth(req);
+  const auth = await checkAdminAuth(req);
   if (!auth.ok) return auth.response;
   const id = (req as BunRequest).params.id ?? "";
   const connection = await getProviderConnectionById(id);
@@ -17,7 +17,7 @@ export async function GET(req: Request): Promise<Response> {
 }
 
 export async function PUT(req: Request): Promise<Response> {
-  const auth = await checkAuth(req);
+  const auth = await checkAdminAuth(req);
   if (!auth.ok) return auth.response;
 
   const id = (req as BunRequest).params.id ?? "";
@@ -34,7 +34,7 @@ export async function PUT(req: Request): Promise<Response> {
 }
 
 export async function DELETE(req: Request): Promise<Response> {
-  const auth = await checkAuth(req);
+  const auth = await checkAdminAuth(req);
   if (!auth.ok) return auth.response;
   const id = (req as BunRequest).params.id ?? "";
   const existing = await getProviderConnectionById(id);

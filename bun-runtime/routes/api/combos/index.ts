@@ -1,19 +1,19 @@
 import { getCombos, getComboByName, createCombo } from "@/lib/localDb";
-import { checkAuth } from "lib/authMiddleware.ts";
+import { checkAdminAuth } from "lib/authMiddleware.ts";
 import { CORS_HEADERS } from "lib/cors.ts";
 import { register } from "lib/routeRegistry";
 
 const NAME_REGEX = /^[a-zA-Z0-9_.\-]+$/;
 
 export async function GET(req: Request): Promise<Response> {
-  const auth = await checkAuth(req);
+  const auth = await checkAdminAuth(req);
   if (!auth.ok) return auth.response;
   const combos = await getCombos();
   return Response.json({ combos }, { headers: CORS_HEADERS });
 }
 
 export async function POST(req: Request): Promise<Response> {
-  const auth = await checkAuth(req);
+  const auth = await checkAdminAuth(req);
   if (!auth.ok) return auth.response;
 
   let body: Record<string, unknown>;

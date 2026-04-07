@@ -19,6 +19,28 @@ export function openDb(): Database {
   _db.exec("PRAGMA synchronous = NORMAL;");
   _db.exec(CREATE_TABLES);
 
+  // Clean up expired sessions on startup
+  _db.run("DELETE FROM sessions WHERE expires_at < ?", [new Date().toISOString()]);
+
+  // Bootstrap admin user from env vars (only if username doesn't exist yet)
+  const adminUsername = process.env.ADMIN_USERNAME;
+  const adminPassword = process.env.ADMIN_PASSWORD;
+  if (adminUsername && adminPassword) {
+    const existing = _db
+      .query<{ id: string }, string>("SELECT id FROM users WHERE username = ?")
+      .get(adminUsername);
+    if (!existing) {
+      // Hash synchronously at startup — Bun.password.hashSync uses argon2id
+      const hash = Bun.password.hashSync(adminPassword);
+      const id = randomUUID();
+      _db.run(
+        "INSERT INTO users (id, username, password_hash, created_at) VALUES (?, ?, ?, ?)",
+        [id, adminUsername, hash, new Date().toISOString()]
+      );
+      console.log(`[AUTH] Created admin user: ${adminUsername}`);
+    }
+  }
+
   return _db;
 }
 
@@ -410,6 +432,82 @@ export async function updateApiKey(id: string, data: Partial<ApiKey>): Promise<A
 export async function deleteApiKey(id: string): Promise<boolean> {
   const result = db().run("DELETE FROM api_keys WHERE id = ?", [id]);
   return (result.changes ?? 0) > 0;
+}
+
+// ─── Users ────────────────────────────────────────────────────────────────────
+
+export interface User {
+  id: string;
+  username: string;
+  passwordHash: string;
+  createdAt?: string;
+}
+
+export async function createUser(username: string, passwordHash: string): Promise<User> {
+  const id = randomUUID();
+  const now = new Date().toISOString();
+  db().run(
+    "INSERT INTO users (id, username, password_hash, created_at) VALUES (?, ?, ?, ?)",
+    [id, username, passwordHash, now]
+  );
+  return { id, username, passwordHash, createdAt: now };
+}
+
+export async function getUserByUsername(username: string): Promise<User | null> {
+  const row = db()
+    .query<{ id: string; username: string; password_hash: string; created_at: string }, string>(
+      "SELECT id, username, password_hash, created_at FROM users WHERE username = ?"
+    )
+    .get(username);
+  if (!row) return null;
+  return { id: row.id, username: row.username, passwordHash: row.password_hash, createdAt: row.created_at };
+}
+
+export async function getUserById(id: string): Promise<User | null> {
+  const row = db()
+    .query<{ id: string; username: string; password_hash: string; created_at: string }, string>(
+      "SELECT id, username, password_hash, created_at FROM users WHERE id = ?"
+    )
+    .get(id);
+  if (!row) return null;
+  return { id: row.id, username: row.username, passwordHash: row.password_hash, createdAt: row.created_at };
+}
+
+// ─── Sessions ──────────────────────────────────────────────────────────────────
+
+const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+export async function createSession(userId: string): Promise<{ token: string; expiresAt: string }> {
+  const token = randomUUID();
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + SESSION_TTL_MS).toISOString();
+  db().run(
+    "INSERT INTO sessions (token, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)",
+    [token, userId, expiresAt, now.toISOString()]
+  );
+  return { token, expiresAt };
+}
+
+export async function getSessionByToken(token: string): Promise<{ userId: string; expiresAt: string } | null> {
+  const row = db()
+    .query<{ user_id: string; expires_at: string }, string>(
+      "SELECT user_id, expires_at FROM sessions WHERE token = ?"
+    )
+    .get(token);
+  if (!row) return null;
+  if (new Date(row.expires_at) < new Date()) {
+    db().run("DELETE FROM sessions WHERE token = ?", [token]);
+    return null;
+  }
+  return { userId: row.user_id, expiresAt: row.expires_at };
+}
+
+export async function deleteSession(token: string): Promise<void> {
+  db().run("DELETE FROM sessions WHERE token = ?", [token]);
+}
+
+export async function deleteExpiredSessions(): Promise<void> {
+  db().run("DELETE FROM sessions WHERE expires_at < ?", [new Date().toISOString()]);
 }
 
 // ─── Model Aliases ─────────────────────────────────────────────────────────────

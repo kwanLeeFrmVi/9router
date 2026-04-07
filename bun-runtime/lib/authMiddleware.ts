@@ -1,4 +1,4 @@
-import { getSettings, getApiKeyByKey } from "../db/index.ts";
+import { getSettings, getApiKeyByKey, getSessionByToken, getUserById } from "../db/index.ts";
 import { extractApiKey, isValidApiKey } from "../services/auth.ts";
 import { errorResponse } from "open-sse/utils/error.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
@@ -37,4 +37,34 @@ export async function checkAuth(request: Request): Promise<AuthResult> {
   }
 
   return { ok: true, apiKey };
+}
+
+export type AdminAuthResult =
+  | { ok: true; userId: string }
+  | { ok: false; response: Response };
+
+/**
+ * Validate a user session token for management endpoints.
+ * Always enforced — independent of requireApiKey setting.
+ */
+export async function checkAdminAuth(request: Request): Promise<AdminAuthResult> {
+  const authHeader = request.headers.get("Authorization");
+  const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7).trim() : null;
+
+  if (!token) {
+    return { ok: false, response: Response.json({ error: "Unauthorized" }, { status: 401 }) };
+  }
+
+  const session = await getSessionByToken(token);
+  if (!session) {
+    return { ok: false, response: Response.json({ error: "Invalid or expired session" }, { status: 401 }) };
+  }
+
+  const user = await getUserById(session.userId);
+  if (!user) {
+    return { ok: false, response: Response.json({ error: "User not found" }, { status: 401 }) };
+  }
+
+  log.debug("AUTH", `Session valid for user: ${user.username}`);
+  return { ok: true, userId: session.userId };
 }

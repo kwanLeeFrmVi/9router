@@ -1,5 +1,5 @@
 
-import { checkAuth } from "lib/authMiddleware.ts";
+import { checkAdminAuth } from "lib/authMiddleware.ts";
 import { deleteCombo, getComboById, getComboByName, updateCombo } from "@/lib/localDb";
 import { CORS_HEADERS } from "lib/cors.ts";
 import { register } from "lib/routeRegistry";
@@ -8,7 +8,7 @@ type BunRequest = Request & { params: Record<string, string> };
 const NAME_REGEX = /^[a-zA-Z0-9_.\-]+$/;
 
 export async function GET(req: Request): Promise<Response> {
-  const auth = await checkAuth(req);
+  const auth = await checkAdminAuth(req);
   if (!auth.ok) return auth.response;
   const id = (req as BunRequest).params.id ?? "";
   const combo = await getComboById(id);
@@ -17,7 +17,7 @@ export async function GET(req: Request): Promise<Response> {
 }
 
 export async function PUT(req: Request): Promise<Response> {
-  const auth = await checkAuth(req);
+  const auth = await checkAdminAuth(req);
   if (!auth.ok) return auth.response;
 
   const id = (req as BunRequest).params.id ?? "";
@@ -48,7 +48,7 @@ export async function PUT(req: Request): Promise<Response> {
 }
 
 export async function DELETE(req: Request): Promise<Response> {
-  const auth = await checkAuth(req);
+  const auth = await checkAdminAuth(req);
   if (!auth.ok) return auth.response;
   const id = (req as BunRequest).params.id ?? "";
   const combo = await getComboById(id);

@@ -26,14 +26,26 @@
     "noUnusedParameters": false,
     "noPropertyAccessFromIndexSignature": false,
 
-    // Path aliases: resolve @/ imports used by open-sse internals
+    // Path aliases
     "baseUrl": ".",
     "paths": {
-      "@/lib/usageDb.js": ["./stubs/usageDb.ts"],
       "@/lib/usageDb": ["./stubs/usageDb.ts"],
       "@/lib/localDb": ["./db/index.ts"],
-      "@/lib/localDb.js": ["./db/index.ts"],
-      "@/models": ["./db/index.ts"]
+      "@/models": [
+        "./db/index.ts"
+      ],
+      "@lib/*": [
+        "./lib/*"
+      ],
+      "@handlers/*": [
+        "./handlers/*"
+      ],
+      "@db/*": [
+        "./db/*"
+      ],
+      "@stubs/*": [
+        "./stubs/*"
+      ]
     }
   }
 }
