@@ -79,7 +79,7 @@ export function checkFallbackError(
     return { shouldFallback: true, cooldownMs: COOLDOWN_MS.transient };
   }
 
-  return { shouldFallback: true, cooldownMs: COOLDOWN_MS.transient };
+  return { shouldFallback: false, cooldownMs: 0 };
 }
 
 // ─── Account Unavailability ────────────────────────────────────────────────────

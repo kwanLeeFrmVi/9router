@@ -27,6 +27,12 @@ export async function handleEmbeddingsCore(opts: EmbeddingsCoreOptions): Promise
   const { body, modelInfo, credentials, log } = opts;
   const { provider, model } = modelInfo;
 
+  // ── Input validation ─────────────────────────────────────────────────────────
+  const input = body.input;
+  if (!input || typeof input !== "string" && !Array.isArray(input)) {
+    return { success: false, status: HTTP_STATUS.BAD_REQUEST, error: "Missing required field: input (must be string or array)" };
+  }
+
   // Build upstream URL
   const upstreamUrl = buildEmbeddingsUrl(provider, model);
   if (!upstreamUrl) {
@@ -54,6 +60,12 @@ export async function handleEmbeddingsCore(opts: EmbeddingsCoreOptions): Promise
     }
 
     const responseBody = await upstream.text();
+    try {
+      JSON.parse(responseBody);
+    } catch {
+      log?.error?.("EMBED", "Provider response is not valid JSON");
+      return { success: false, status: HTTP_STATUS.BAD_GATEWAY, error: "Provider response is not valid JSON" };
+    }
     const response = new globalThis.Response(responseBody, {
       status: upstream.status || 200,
       headers: { "Content-Type": "application/json" },
