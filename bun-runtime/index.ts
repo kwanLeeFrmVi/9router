@@ -38,6 +38,7 @@ const routes = buildRoutes();
 
 const server = Bun.serve({
   port: PORT,
+  reusePort: true, // Linux only: enables SO_REUSEPORT for multi-process clustering
   routes,
 
   fetch(req) {

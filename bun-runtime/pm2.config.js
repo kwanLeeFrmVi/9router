@@ -5,7 +5,7 @@ module.exports = {
       script: "index.ts",
       interpreter: "bun",
       exec_mode: "fork",
-      instances: 1,
+      instances: 4, //"max" spawn one process per CPU core; reusePort handles load balancing
       cwd: __dirname,
       autorestart: true,
       watch: false,
