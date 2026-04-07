@@ -1,14 +1,14 @@
-// Port of src/sse/services/model.js
-// Replaced @/lib/localDb → ../db/index
+// Model parsing, alias resolution, and combo handling.
+// Native TypeScript — no open-sse dependency.
 
 import { getModelAliases, getComboByName, getProviderNodes } from "../db/index.ts";
 import {
-  parseModel,
+  parseModel as _parseModel,
   resolveModelAliasFromMap,
-  getModelInfoCore,
-} from "open-sse/services/model.js";
+  getModelInfoCore as _getModelInfoCore,
+} from "../ai-bridge/services/model.ts";
 
-export { parseModel };
+export { parseModel as parseModel } from "../ai-bridge/services/model.ts";
 
 /**
  * Resolve model alias from DB
@@ -22,7 +22,7 @@ export async function resolveModelAlias(alias: string): Promise<unknown> {
  * Get full model info (parse or resolve alias/combo)
  */
 export async function getModelInfo(modelStr: string): Promise<{ provider: string | null; model: string }> {
-  const parsed = parseModel(modelStr) as { isAlias: boolean; provider: string; providerAlias: string; model: string };
+  const parsed = _parseModel(modelStr) as { isAlias: boolean; provider: string; providerAlias: string; model: string };
 
   if (!parsed.isAlias) {
     if (parsed.provider === parsed.providerAlias) {
@@ -46,7 +46,7 @@ export async function getModelInfo(modelStr: string): Promise<{ provider: string
     return { provider: null, model: parsed.model };
   }
 
-  return getModelInfoCore(modelStr, getModelAliases) as Promise<{ provider: string | null; model: string }>;
+  return _getModelInfoCore(modelStr, getModelAliases) as Promise<{ provider: string | null; model: string }>;
 }
 
 /**

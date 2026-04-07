@@ -1,5 +1,5 @@
 // Port of src/app/api/v1beta/models/route.js
-import { PROVIDER_MODELS } from "open-sse/config/providerModels.js";
+import { PROVIDER_MODELS } from "ai-bridge/config/providerModels.ts";
 import { CORS_HEADERS } from "lib/cors.ts";
 import { register } from "lib/routeRegistry";
 

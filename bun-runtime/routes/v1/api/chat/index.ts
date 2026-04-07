@@ -1,6 +1,6 @@
 // Port of src/app/api/v1/api/chat/route.js
 import { handleChat } from "../../../../handlers/chat.ts";
-import { transformToOllama } from "open-sse/utils/ollamaTransform.js";
+import { transformToOllama } from "ai-bridge/utils/ollamaTransform.ts";
 
 import { CORS_HEADERS } from "lib/cors.ts";
 import { register } from "lib/routeRegistry";

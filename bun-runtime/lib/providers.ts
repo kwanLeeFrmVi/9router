@@ -1,7 +1,6 @@
-// Provider helpers derived from open-sse's PROVIDER_ID_TO_ALIAS
-// Keeps bun-runtime standalone without copying src/shared/constants/providers.js
+// Provider helpers — reads from ai-bridge's provider model registry.
 
-import { PROVIDER_ID_TO_ALIAS } from "open-sse/config/providerModels.js";
+import { PROVIDER_ID_TO_ALIAS } from "../ai-bridge/config/providerModels.ts";
 
 // Invert ID→alias to get alias→ID
 const ALIAS_TO_ID: Record<string, string> = Object.fromEntries(

@@ -1,5 +1,5 @@
 // Port of src/app/api/v1/models/route.js
-import { PROVIDER_MODELS, PROVIDER_ID_TO_ALIAS } from "open-sse/config/providerModels.js";
+import { PROVIDER_MODELS, PROVIDER_ID_TO_ALIAS } from "ai-bridge/config/providerModels.ts";
 import { getProviderAlias, isAnthropicCompatibleProvider, isOpenAICompatibleProvider } from "lib/providers.ts";
 import { getProviderConnections, getCombos } from "db/index.ts";
 import { CORS_HEADERS } from "lib/cors.ts";

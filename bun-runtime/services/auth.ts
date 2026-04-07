@@ -12,7 +12,7 @@ import {
   isModelLockActive,
   buildModelLockUpdate,
   getEarliestModelLockUntil,
-} from "open-sse/services/accountFallback.js";
+} from "../ai-bridge/services/auth.ts";
 import * as log from "../lib/logger.ts";
 
 // Mutex to prevent race conditions during account selection

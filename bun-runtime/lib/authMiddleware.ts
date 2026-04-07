@@ -1,7 +1,7 @@
 import { getSettings, getApiKeyByKey, getSessionByToken, getUserById } from "../db/index.ts";
 import { extractApiKey, isValidApiKey } from "../services/auth.ts";
-import { errorResponse } from "open-sse/utils/error.js";
-import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
+import { errorResponse } from "../ai-bridge/utils/error.ts";
+import { HTTP_STATUS } from "../ai-bridge/config/runtimeConfig.ts";
 import * as log from "./logger.ts";
 
 export type AuthResult =

@@ -2,25 +2,22 @@
 // Replaced @/lib/localDb → ../db/index
 // Replaced ../utils/logger.js → ../lib/logger
 
-import "open-sse/index.js";
-
 import {
   getProviderCredentials,
   markAccountUnavailable,
   clearAccountError,
 } from "../services/auth.ts";
 import { checkAuth } from "../lib/authMiddleware.ts";
-import { cacheClaudeHeaders } from "open-sse/utils/claudeHeaderCache.js";
+import { cacheClaudeHeaders } from "../ai-bridge/utils/claudeHeaderCache.ts";
 import { getSettings } from "../db/index.ts";
 import { getModelInfo, getComboModels } from "../services/model.ts";
-import { handleChatCore } from "open-sse/handlers/chatCore.js";
-import { errorResponse, unavailableResponse } from "open-sse/utils/error.js";
-import { handleComboChat } from "open-sse/services/combo.js";
-import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
-import { detectFormatByEndpoint } from "open-sse/translator/formats.js";
+import { handleChatCore } from "../ai-bridge/handlers/chatCore.ts";
+import { errorResponse, unavailableResponse } from "../ai-bridge/utils/error.ts";
+import { HTTP_STATUS } from "../ai-bridge/config/runtimeConfig.ts";
+import { detectFormatByEndpoint } from "../ai-bridge/translator/formats.ts";
 import * as log from "../lib/logger.ts";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.ts";
-import { getProjectIdForConnection } from "open-sse/services/projectId.js";
+import { getProjectIdForConnection } from "../services/tokenRefresh.ts";
 import { statsEmitter } from "../stubs/usageDb.ts";
 
 /**
@@ -75,14 +72,14 @@ export async function handleChat(
     const comboStrategy = comboSpecificStrategy ?? (settings.comboStrategy as string | undefined) ?? "fallback";
 
     log.info("CHAT", `Combo "${modelStr}" with ${comboModels.length} models (strategy: ${comboStrategy})`);
-    return handleComboChat({
+    return handleComboModelFallback({
       body,
       models: comboModels,
       handleSingleModel: (b: Record<string, unknown>, m: string) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey),
       log,
       comboName: modelStr,
       comboStrategy,
-    }) as Promise<Response>;
+    });
   }
 
   return handleSingleModelChat(body, modelStr, clientRawRequest, request, apiKey);
@@ -109,14 +106,14 @@ async function handleSingleModelChat(
       const comboStrategy = comboSpecificStrategy ?? (chatSettings.comboStrategy as string | undefined) ?? "fallback";
 
       log.info("CHAT", `Combo "${modelStr}" with ${comboModels.length} models (strategy: ${comboStrategy})`);
-      return handleComboChat({
+      return handleComboModelFallback({
         body,
         models: comboModels,
         handleSingleModel: (b: Record<string, unknown>, m: string) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey),
         log,
         comboName: modelStr,
         comboStrategy,
-      }) as Promise<Response>;
+      });
     }
     log.warn("CHAT", "Invalid model format", { model: modelStr });
     return errorResponse(HTTP_STATUS.BAD_REQUEST, "Invalid model format") as Response;
@@ -174,12 +171,12 @@ async function handleSingleModelChat(
       modelInfo: { provider, model },
       credentials: refreshedCredentials,
       log,
-      clientRawRequest,
-      connectionId: creds.connectionId,
+      clientRawRequest: clientRawRequest ?? undefined,
+      connectionId: creds.connectionId as string | undefined,
       userAgent,
       apiKey,
       ccFilterNaming: !!(chatSettings.ccFilterNaming as boolean | undefined),
-      sourceFormatOverride: request?.url ? detectFormatByEndpoint(new URL(request.url).pathname, body) : null,
+      sourceFormatOverride: request?.url ? detectFormatByEndpoint(new URL(request.url).pathname, body) ?? undefined : undefined,
       onCredentialsRefreshed: async (newCreds: Record<string, unknown>) => {
         await updateProviderCredentials(creds.connectionId as string, {
           accessToken: newCreds.accessToken,
@@ -214,4 +211,50 @@ async function handleSingleModelChat(
 
     return result.response;
   }
+}
+
+// ─── Combo model fallback ───────────────────────────────────────────────────────
+
+interface ComboOptions {
+  body: Record<string, unknown>;
+  models: string[];
+  handleSingleModel: (body: Record<string, unknown>, model: string) => Promise<Response>;
+  log: { info: (ctx: string, msg: string) => void; warn: (ctx: string, msg: string) => void };
+  comboName: string;
+  comboStrategy: string;
+}
+
+/**
+ * Try models in order until one succeeds.
+ * fallback: use first model that succeeds.
+ * round-robin: rotate through models, succeed on first.
+ */
+async function handleComboModelFallback(opts: ComboOptions): Promise<Response> {
+  const { body, models, handleSingleModel, log, comboName, comboStrategy } = opts;
+
+  if (comboStrategy === "round-robin") {
+    const index = (handleComboModelFallback as unknown as { _rrIndex?: number })._rrIndex ?? 0;
+    const model = models[index % models.length]!;
+    (handleComboModelFallback as unknown as { _rrIndex: number })._rrIndex = index + 1;
+    log.info("COMBO", `Round-robin: trying ${model} (index ${index})`);
+    return handleSingleModel(body, model);
+  }
+
+  // fallback: try each model in order
+  let lastError: string | null = null;
+  for (const model of models) {
+    log.info("COMBO", `Fallback: trying ${model}`);
+    try {
+      const resp = await handleSingleModel(body, model);
+      if (resp.ok) return resp;
+      lastError = `Model ${model} returned status ${resp.status}`;
+    } catch (e) {
+      lastError = `${model}: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  return new Response(JSON.stringify({ error: lastError ?? "All combo models failed" }), {
+    status: 503,
+    headers: { "Content-Type": "application/json" },
+  });
 }

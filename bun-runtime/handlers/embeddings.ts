@@ -9,9 +9,9 @@ import {
 } from "../services/auth.ts";
 import { checkAuth } from "../lib/authMiddleware.ts";
 import { getModelInfo } from "../services/model.ts";
-import { handleEmbeddingsCore } from "open-sse/handlers/embeddingsCore.js";
-import { errorResponse, unavailableResponse } from "open-sse/utils/error.js";
-import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
+import { handleEmbeddingsCore } from "../ai-bridge/handlers/embeddingsCore.ts";
+import { errorResponse, unavailableResponse } from "../ai-bridge/utils/error.ts";
+import { HTTP_STATUS } from "../ai-bridge/config/runtimeConfig.ts";
 import * as log from "../lib/logger.ts";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.ts";
 

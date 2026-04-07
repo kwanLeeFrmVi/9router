@@ -1,8 +1,5 @@
 // Bun runtime entry point for 9router v1 API endpoints
-// Must patch global fetch first (open-sse proxy support)
-import "open-sse/index.js";
-
-import { initTranslators } from "open-sse/translator/index.js";
+import { initTranslators } from "./ai-bridge/translator/index.ts";
 import { openDb } from "./db/index.ts";
 import { initConsoleLogCapture } from "./lib/consoleLogBuffer.ts";
 import { corsResponse } from "./lib/cors.ts";
