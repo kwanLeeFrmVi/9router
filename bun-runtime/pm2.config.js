@@ -1,3 +1,5 @@
+const isLinux = process.platform === "linux";
+
 module.exports = {
   apps: [
     {
@@ -5,7 +7,7 @@ module.exports = {
       script: "index.ts",
       interpreter: "bun",
       exec_mode: "fork",
-      instances: 4, //"max" spawn one process per CPU core; reusePort handles load balancing
+      instances: isLinux ? 4 : 1, //"max" spawn one process per CPU core; reusePort handles load balancing
       cwd: __dirname,
       autorestart: true,
       watch: false,

@@ -29,6 +29,7 @@ async function loadAllRoutes(dir: string): Promise<void> {
 }
 
 const PORT = parseInt(process.env.PORT ?? "20129");
+const isLinux = process.platform === "linux";
 
 // Load all route files so they self-register, then build the routes config
 await loadAllRoutes(join(process.cwd(), "routes"));
@@ -38,7 +39,7 @@ const routes = buildRoutes();
 
 const server = Bun.serve({
   port: PORT,
-  reusePort: true, // Linux only: enables SO_REUSEPORT for multi-process clustering
+  reusePort: isLinux, // SO_REUSEPORT: Linux only, enables multi-process clustering
   routes,
 
   fetch(req) {
