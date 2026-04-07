@@ -1,11 +1,8 @@
 // Port of src/app/api/v1beta/models/[...path]/route.js
-// Handles POST /v1beta/models/* — Gemini format
-// Path parsing: req.params["*"] gives the wildcard string (e.g. "cc/claude-sonnet-4-20250514:streamGenerateContent")
+import { handleChat } from "handlers/chat.ts";
+import { CORS_HEADERS } from "lib/cors.ts";
+import { register } from "lib/routeRegistry";
 
-import { handleChat } from "../handlers/chat.ts";
-import { CORS_HEADERS } from "../lib/cors.ts";
-
-/** Map OpenAI finish_reason → Gemini finishReason */
 const FINISH_REASON_MAP: Record<string, string> = {
   stop: "STOP",
   length: "MAX_TOKENS",
@@ -36,20 +33,11 @@ function convertGeminiToInternal(
   }
 
   const generationConfig = geminiBody.generationConfig as Record<string, unknown> | undefined;
-  return {
-    model,
-    messages,
-    stream,
-    max_tokens: generationConfig?.maxOutputTokens,
-    temperature: generationConfig?.temperature,
-    top_p: generationConfig?.topP,
-  };
+  return { model, messages, stream, max_tokens: generationConfig?.maxOutputTokens, temperature: generationConfig?.temperature, top_p: generationConfig?.topP };
 }
 
 function transformOpenAISSEToGeminiSSE(upstreamResponse: Response, model: string): Response {
-  if (!upstreamResponse.ok || !upstreamResponse.body) {
-    return upstreamResponse;
-  }
+  if (!upstreamResponse.ok || !upstreamResponse.body) return upstreamResponse;
 
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
@@ -57,45 +45,28 @@ function transformOpenAISSEToGeminiSSE(upstreamResponse: Response, model: string
   const transformStream = new TransformStream<Uint8Array, Uint8Array>({
     transform(chunk, controller) {
       const text = decoder.decode(chunk, { stream: true });
-      const lines = text.split("\n");
-
-      for (const line of lines) {
+      for (const line of text.split("\n")) {
         if (!line.startsWith("data:")) continue;
         const data = line.slice(5).trim();
         if (!data || data === "[DONE]") continue;
 
         let parsed: Record<string, unknown>;
-        try {
-          parsed = JSON.parse(data) as Record<string, unknown>;
-        } catch {
-          continue;
-        }
+        try { parsed = JSON.parse(data) as Record<string, unknown>; } catch { continue; }
 
-        const choices = parsed.choices as Array<{
-          delta?: { content?: string; reasoning_content?: string };
-          finish_reason?: string;
-        }> | undefined;
+        const choices = parsed.choices as Array<{ delta?: { content?: string; reasoning_content?: string }; finish_reason?: string }> | undefined;
         const choice = choices?.[0];
         if (!choice) continue;
 
-        const delta = choice.delta ?? {};
         const parts: Array<{ text: string; thought?: boolean }> = [];
-        if (delta.reasoning_content) parts.push({ text: delta.reasoning_content, thought: true });
-        if (delta.content) parts.push({ text: delta.content });
+        if (choice.delta?.reasoning_content) parts.push({ text: choice.delta.reasoning_content, thought: true });
+        if (choice.delta?.content) parts.push({ text: choice.delta.content });
 
         if (parts.length === 0 && !choice.finish_reason) continue;
 
-        const candidate: Record<string, unknown> = {
-          content: { role: "model", parts: parts.length > 0 ? parts : [{ text: "" }] },
-          index: 0,
-        };
-
-        if (choice.finish_reason) {
-          candidate.finishReason = FINISH_REASON_MAP[choice.finish_reason] ?? "STOP";
-        }
+        const candidate: Record<string, unknown> = { content: { role: "model", parts: parts.length > 0 ? parts : [{ text: "" }] }, index: 0 };
+        if (choice.finish_reason) candidate.finishReason = FINISH_REASON_MAP[choice.finish_reason] ?? "STOP";
 
         const geminiChunk: Record<string, unknown> = { candidates: [candidate] };
-
         if (choice.finish_reason && parsed.usage) {
           const usage = parsed.usage as Record<string, number>;
           geminiChunk.usageMetadata = {
@@ -104,9 +75,8 @@ function transformOpenAISSEToGeminiSSE(upstreamResponse: Response, model: string
             totalTokenCount: usage.total_tokens ?? 0,
           };
           const details = (parsed.usage as Record<string, Record<string, number> | undefined>).completion_tokens_details;
-          const reasoningTokens = details?.reasoning_tokens;
-          if (reasoningTokens) {
-            (geminiChunk.usageMetadata as Record<string, unknown>).thoughtsTokenCount = reasoningTokens;
+          if (details?.reasoning_tokens) {
+            (geminiChunk.usageMetadata as Record<string, unknown>).thoughtsTokenCount = details.reasoning_tokens;
           }
           geminiChunk.modelVersion = parsed.model ?? model;
         }
@@ -118,53 +88,30 @@ function transformOpenAISSEToGeminiSSE(upstreamResponse: Response, model: string
 
   return new Response(upstreamResponse.body.pipeThrough(transformStream), {
     status: 200,
-    headers: {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      ...CORS_HEADERS,
-    },
+    headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", ...CORS_HEADERS },
   });
 }
 
 async function convertOpenAIResponseToGemini(response: Response, model: string): Promise<Response> {
   if (!response.ok) return response;
-
   let body: Record<string, unknown>;
-  try {
-    body = await response.json() as Record<string, unknown>;
-  } catch {
-    return response;
-  }
+  try { body = await response.json() as Record<string, unknown>; } catch { return response; }
+  if (body.candidates) return Response.json(body, { headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
+  if (body.error) return Response.json(body, { status: response.status, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
 
-  if (body.candidates) {
-    return Response.json(body, { headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
-  }
-
-  if (body.error) {
-    return Response.json(body, { status: response.status, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
-  }
-
-  const choices = body.choices as Array<{
-    message?: { content?: string; reasoning_content?: string };
-    finish_reason?: string;
-  }> | undefined;
+  const choices = body.choices as Array<{ message?: { content?: string; reasoning_content?: string }; finish_reason?: string }> | undefined;
   const choice = choices?.[0];
-  if (!choice) {
-    return Response.json(body, { headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
-  }
+  if (!choice) return Response.json(body, { headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
 
   const { message, finish_reason } = choice;
   const parts: Array<{ text: string; thought?: boolean }> = [];
   if (message?.reasoning_content) parts.push({ text: message.reasoning_content, thought: true });
   parts.push({ text: message?.content ?? "" });
 
-  const finishReason = FINISH_REASON_MAP[finish_reason ?? ""] ?? "STOP";
-
   const geminiResponse: Record<string, unknown> = {
-    candidates: [{ content: { role: "model", parts }, finishReason, index: 0 }],
+    candidates: [{ content: { role: "model", parts }, finishReason: FINISH_REASON_MAP[finish_reason ?? ""] ?? "STOP", index: 0 }],
     modelVersion: body.model ?? model,
   };
-
   if (body.usage) {
     const usage = body.usage as Record<string, number>;
     geminiResponse.usageMetadata = {
@@ -173,28 +120,20 @@ async function convertOpenAIResponseToGemini(response: Response, model: string):
       totalTokenCount: usage.total_tokens ?? 0,
     };
     const details = (body.usage as Record<string, Record<string, number> | undefined>).completion_tokens_details;
-    const reasoningTokens = details?.reasoning_tokens;
-    if (reasoningTokens) {
-      (geminiResponse.usageMetadata as Record<string, unknown>).thoughtsTokenCount = reasoningTokens;
+    if (details?.reasoning_tokens) {
+      (geminiResponse.usageMetadata as Record<string, unknown>).thoughtsTokenCount = details.reasoning_tokens;
     }
   }
-
   return Response.json(geminiResponse, { headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
 }
 
-export async function geminiGenerateHandler(req: Request): Promise<Response> {
+export async function POST(req: Request): Promise<Response> {
   try {
-    // req.params["*"] e.g. "cc/claude-sonnet-4-20250514:streamGenerateContent"
-    //                   or "chutes/deepseek-ai/DeepSeek-V3-0324:generateContent"
     const params = (req as unknown as { params?: Record<string, string> }).params;
     const pathStr = params?.["*"] ?? new URL(req.url).pathname.replace(/^\/v1beta\/models\//, "");
-
-    // Split on the colon that precedes the action verb
     const colonIdx = pathStr.lastIndexOf(":");
-    const modelPath = colonIdx >= 0 ? pathStr.slice(0, colonIdx) : pathStr;
-    const actionSuffix = colonIdx >= 0 ? pathStr.slice(colonIdx) : "";
-    const stream = actionSuffix === ":streamGenerateContent";
-    const model = modelPath;
+    const model = colonIdx >= 0 ? pathStr.slice(0, colonIdx) : pathStr;
+    const stream = colonIdx >= 0 && pathStr.slice(colonIdx) === ":streamGenerateContent";
 
     const body = await req.json() as Record<string, unknown>;
     const convertedBody = convertGeminiToInternal(body, model, stream);
@@ -206,17 +145,15 @@ export async function geminiGenerateHandler(req: Request): Promise<Response> {
     });
 
     const response = await handleChat(newRequest);
-
-    if (stream) {
-      return transformOpenAISSEToGeminiSSE(response, model);
-    } else {
-      return convertOpenAIResponseToGemini(response, model);
-    }
+    return stream ? transformOpenAISSEToGeminiSSE(response, model) : convertOpenAIResponseToGemini(response, model);
   } catch (error) {
     console.log("Error handling Gemini request:", error);
-    return Response.json(
-      { error: { message: (error as Error).message, code: 500 } },
-      { status: 500 }
-    );
+    return Response.json({ error: { message: (error as Error).message, code: 500 } }, { status: 500 });
   }
 }
+
+export function OPTIONS(): Response {
+  return new Response(null, { status: 204, headers: CORS_HEADERS });
+}
+
+register("/v1beta/models/*", { POST, OPTIONS });

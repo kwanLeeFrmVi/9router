@@ -1,11 +1,9 @@
 // Port of src/app/api/v1/models/route.js
-// Uses open-sse for PROVIDER_MODELS/PROVIDER_ID_TO_ALIAS
-// Uses local providers.ts for getProviderAlias/isOpenAICompatibleProvider/isAnthropicCompatibleProvider
-
 import { PROVIDER_MODELS, PROVIDER_ID_TO_ALIAS } from "open-sse/config/providerModels.js";
-import { getProviderAlias, isAnthropicCompatibleProvider, isOpenAICompatibleProvider } from "../lib/providers.ts";
-import { getProviderConnections, getCombos } from "../db/index.ts";
-import { CORS_HEADERS } from "../lib/cors.ts";
+import { getProviderAlias, isAnthropicCompatibleProvider, isOpenAICompatibleProvider } from "lib/providers.ts";
+import { getProviderConnections, getCombos } from "db/index.ts";
+import { CORS_HEADERS } from "lib/cors.ts";
+import { register } from "lib/routeRegistry";
 
 const providerModels = PROVIDER_MODELS as Record<string, Array<{ id: string; name?: string }>>;
 const providerIdToAlias = PROVIDER_ID_TO_ALIAS as Record<string, string>;
@@ -55,7 +53,7 @@ async function fetchCompatibleModelIds(connection: Record<string, unknown>): Pro
   }
 }
 
-export async function modelsHandler(_req: Request): Promise<Response> {
+export async function GET(_req: Request): Promise<Response> {
   try {
     let connections: Record<string, unknown>[] = [];
     try {
@@ -157,3 +155,9 @@ export async function modelsHandler(_req: Request): Promise<Response> {
     );
   }
 }
+
+export function OPTIONS(): Response {
+  return new Response(null, { status: 204, headers: CORS_HEADERS });
+}
+
+register("/v1/models", { GET, OPTIONS });

@@ -8,11 +8,10 @@ import {
   getProviderCredentials,
   markAccountUnavailable,
   clearAccountError,
-  extractApiKey,
-  isValidApiKey,
 } from "../services/auth.ts";
+import { checkAuth } from "../lib/authMiddleware.ts";
 import { cacheClaudeHeaders } from "open-sse/utils/claudeHeaderCache.js";
-import { getSettings, getApiKeyByKey } from "../db/index.ts";
+import { getSettings } from "../db/index.ts";
 import { getModelInfo, getComboModels } from "../services/model.ts";
 import { handleChatCore } from "open-sse/handlers/chatCore.js";
 import { errorResponse, unavailableResponse } from "open-sse/utils/error.js";
@@ -57,29 +56,11 @@ export async function handleChat(
   const effort = (body.reasoning_effort as string | undefined) ?? (body.reasoning as Record<string, unknown> | undefined)?.effort ?? null;
   log.request("POST", `${url.pathname} | ${modelStr} | ${msgCount} msgs${toolCount ? ` | ${toolCount} tools` : ""}${effort ? ` | effort=${effort}` : ""}`);
 
-  const authHeader = request.headers.get("Authorization");
-  const apiKey = extractApiKey(request);
-  if (authHeader && apiKey) {
-    const masked = log.maskKey(apiKey);
-    const keyRecord = await getApiKeyByKey(apiKey);
-    const keyName = (keyRecord?.name as string | undefined) ?? "unnamed";
-    log.debug("AUTH", `API Key: ${masked} (${keyName})`);
-  } else {
-    log.debug("AUTH", "No API key provided (local mode)");
-  }
+  const auth = await checkAuth(request);
+  if (!auth.ok) return auth.response;
+  const apiKey = auth.apiKey;
 
   const settings = await getSettings();
-  if (settings.requireApiKey) {
-    if (!apiKey) {
-      log.warn("AUTH", "Missing API key (requireApiKey=true)");
-      return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Missing API key") as Response;
-    }
-    const valid = await isValidApiKey(apiKey);
-    if (!valid) {
-      log.warn("AUTH", "Invalid API key (requireApiKey=true)");
-      return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Invalid API key") as Response;
-    }
-  }
 
   if (!modelStr) {
     log.warn("CHAT", "Missing model");

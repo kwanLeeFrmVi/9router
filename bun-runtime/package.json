@@ -9,7 +9,9 @@
     "migrate": "bun db/migrate.ts"
   },
   "dependencies": {
-    "open-sse": "file:../open-sse"
+    "open-sse": "file:../open-sse",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4"
   },
   "devDependencies": {
     "@types/bun": "latest"

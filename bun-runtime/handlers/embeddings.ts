@@ -6,10 +6,8 @@ import {
   getProviderCredentials,
   markAccountUnavailable,
   clearAccountError,
-  extractApiKey,
-  isValidApiKey,
 } from "../services/auth.ts";
-import { getSettings } from "../db/index.ts";
+import { checkAuth } from "../lib/authMiddleware.ts";
 import { getModelInfo } from "../services/model.ts";
 import { handleEmbeddingsCore } from "open-sse/handlers/embeddingsCore.js";
 import { errorResponse, unavailableResponse } from "open-sse/utils/error.js";
@@ -35,25 +33,8 @@ export async function handleEmbeddings(request: Request): Promise<Response> {
 
   log.request("POST", `${url.pathname} | ${modelStr}`);
 
-  const apiKey = extractApiKey(request);
-  if (apiKey) {
-    log.debug("AUTH", `API Key: ${log.maskKey(apiKey)}`);
-  } else {
-    log.debug("AUTH", "No API key provided (local mode)");
-  }
-
-  const settings = await getSettings();
-  if (settings.requireApiKey) {
-    if (!apiKey) {
-      log.warn("AUTH", "Missing API key (requireApiKey=true)");
-      return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Missing API key") as Response;
-    }
-    const valid = await isValidApiKey(apiKey);
-    if (!valid) {
-      log.warn("AUTH", "Invalid API key (requireApiKey=true)");
-      return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Invalid API key") as Response;
-    }
-  }
+  const auth = await checkAuth(request);
+  if (!auth.ok) return auth.response;
 
   if (!modelStr) {
     log.warn("EMBEDDINGS", "Missing model");
@@ -92,7 +73,7 @@ export async function handleEmbeddings(request: Request): Promise<Response> {
         const errorMsg = lastError ?? (creds.lastError as string | undefined) ?? "Unavailable";
         const status = lastStatus ?? (Number(creds.lastErrorCode) || HTTP_STATUS.SERVICE_UNAVAILABLE);
         log.warn("EMBEDDINGS", `[${provider}/${model}] ${errorMsg} (${creds.retryAfterHuman})`);
-        return unavailableResponse(status, `[${provider}/${model}] ${errorMsg}`, creds.retryAfter, creds.retryAfterHuman) as Response;
+        return unavailableResponse(status, `[${provider}/${model}] ${errorMsg}`, creds.retryAfter as string, creds.retryAfterHuman as string) as Response;
       }
       if (excludeConnectionIds.size === 0) {
         log.error("AUTH", `No credentials for provider: ${provider}`);

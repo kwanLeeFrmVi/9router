@@ -1,10 +1,11 @@
 // Port of src/app/api/v1beta/models/route.js
 import { PROVIDER_MODELS } from "open-sse/config/providerModels.js";
-import { CORS_HEADERS } from "../lib/cors.ts";
+import { CORS_HEADERS } from "lib/cors.ts";
+import { register } from "lib/routeRegistry";
 
 const providerModels = PROVIDER_MODELS as Record<string, Array<{ id: string; name?: string }>>;
 
-export function geminiModelsHandler(_req: Request): Response {
+export function GET(_req: Request): Response {
   try {
     const models: unknown[] = [];
 
@@ -26,3 +27,9 @@ export function geminiModelsHandler(_req: Request): Response {
     return Response.json({ error: { message: (error as Error).message } }, { status: 500 });
   }
 }
+
+export function OPTIONS(): Response {
+  return new Response(null, { status: 204, headers: CORS_HEADERS });
+}
+
+register("/v1beta/models", { GET, OPTIONS });

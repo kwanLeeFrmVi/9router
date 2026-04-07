@@ -1,9 +1,11 @@
 // Port of src/app/api/v1/api/chat/route.js
-import { handleChat } from "../handlers/chat.ts";
+import { handleChat } from "../../../../handlers/chat.ts";
 import { transformToOllama } from "open-sse/utils/ollamaTransform.js";
-import { CORS_HEADERS } from "../lib/cors.ts";
 
-export async function ollamaChatHandler(req: Request): Promise<Response> {
+import { CORS_HEADERS } from "lib/cors.ts";
+import { register } from "lib/routeRegistry";
+
+export async function POST(req: Request): Promise<Response> {
   let body: Record<string, unknown>;
   try {
     body = await req.json() as Record<string, unknown>;
@@ -12,7 +14,6 @@ export async function ollamaChatHandler(req: Request): Promise<Response> {
   }
 
   const modelName = (body.model as string | undefined) ?? "llama3.2";
-  // Always force stream=true — transformToOllama only handles SSE
   const streamingBody = { ...body, stream: true };
 
   const internalReq = new Request(req.url, {
@@ -28,3 +29,9 @@ export async function ollamaChatHandler(req: Request): Promise<Response> {
   for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v);
   return new Response(ollamaRes.body, { status: ollamaRes.status, statusText: ollamaRes.statusText, headers });
 }
+
+export function OPTIONS(): Response {
+  return new Response(null, { status: 204, headers: CORS_HEADERS });
+}
+
+register("/v1/api/chat", { POST, OPTIONS });

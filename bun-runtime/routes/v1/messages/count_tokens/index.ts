@@ -1,7 +1,9 @@
 // Port of src/app/api/v1/messages/count_tokens/route.js
-import { CORS_HEADERS } from "../lib/cors.ts";
 
-export async function countTokensHandler(req: Request): Promise<Response> {
+import { CORS_HEADERS } from "lib/cors.ts";
+import { register } from "lib/routeRegistry";
+
+export async function POST(req: Request): Promise<Response> {
   let body: Record<string, unknown>;
   try {
     body = await req.json() as Record<string, unknown>;
@@ -32,3 +34,9 @@ export async function countTokensHandler(req: Request): Promise<Response> {
     headers: { "Content-Type": "application/json", ...CORS_HEADERS },
   });
 }
+
+export function OPTIONS(): Response {
+  return new Response(null, { status: 204, headers: CORS_HEADERS });
+}
+
+register("/v1/messages/count_tokens", { POST, OPTIONS });
