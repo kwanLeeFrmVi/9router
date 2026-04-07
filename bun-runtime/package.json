@@ -6,7 +6,10 @@
   "scripts": {
     "dev": "bun --hot index.ts",
     "start": "bun index.ts",
-    "migrate": "bun db/migrate.ts"
+    "migrate": "bun db/migrate.ts",
+    "dev:dashboard": "bun --cwd dashboard dev",
+    "build:dashboard": "bun --cwd dashboard build",
+    "preview:dashboard": "bun --cwd dashboard preview"
   },
   "dependencies": {
     "open-sse": "file:../open-sse",
