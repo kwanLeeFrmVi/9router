@@ -4,6 +4,8 @@ module.exports = {
       name: "9router-bun",
       script: "index.ts",
       interpreter: "bun",
+      exec_mode: "fork",
+      instances: 1,
       cwd: __dirname,
       autorestart: true,
       watch: false,

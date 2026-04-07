@@ -15,9 +15,10 @@ export function openDb(): Database {
   const dbPath = join(dataDir, "router.db");
 
   _db = new Database(dbPath, { create: true });
-  _db.exec("PRAGMA journal_mode = WAL;");
-  _db.exec("PRAGMA synchronous = NORMAL;");
-  _db.exec(CREATE_TABLES);
+  _db.run("PRAGMA journal_mode = WAL;");
+  _db.run("PRAGMA synchronous = NORMAL;");
+  _db.run("PRAGMA busy_timeout = 5000;");
+  _db.run(CREATE_TABLES);
 
   // Clean up expired sessions on startup
   _db.run("DELETE FROM sessions WHERE expires_at < ?", [new Date().toISOString()]);
