@@ -71,8 +71,9 @@ export function convertGeminiResponseToOpenAI(
 
   // candidates[0].content.parts → delta
   const candidates = parsed.candidates as Array<Record<string, unknown>> | undefined;
-  if (Array.isArray(candidates) && candidates[0]) {
-    const content = candidates[0]!.content as Record<string, unknown> | undefined;
+  const firstCandidate = Array.isArray(candidates) ? candidates[0] : undefined;
+  if (firstCandidate) {
+    const content = firstCandidate.content as Record<string, unknown> | undefined;
     if (content) {
       const parts = content.parts as Array<Record<string, unknown>> | undefined;
       if (Array.isArray(parts)) {
@@ -120,8 +121,10 @@ export function convertGeminiResponseToOpenAI(
   }
 
   // done: true → finish_reason
-  const _promptFeedback = parsed.promptFeedback as Record<string, unknown> | undefined;
-  const finishReason = parsed.finishReason as string | undefined;
+  // Note: finishReason lives inside candidates[0] in the Gemini streaming SSE format
+  // STOP and MAX_TOKENS are handled via the [DONE] sentinel in buildDoneEvents.
+  // Other reasons (SAFETY, RECITATION, OTHER) are emitted inline here.
+  const finishReason = firstCandidate ? (firstCandidate as Record<string, unknown>).finishReason as string | undefined : undefined;
   if (finishReason && finishReason !== "STOP" && finishReason !== "MAX_TOKENS") {
     const mapped = mapGeminiFinishReason(finishReason);
     const usage = parsed.usageMetadata as Record<string, unknown> | undefined;
