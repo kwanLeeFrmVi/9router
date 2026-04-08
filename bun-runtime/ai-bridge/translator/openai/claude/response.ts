@@ -73,8 +73,8 @@ export function convertClaudeResponseToOpenAI(
   for (const line of lines) {
     if (line.startsWith("event:")) {
       _eventType = line.slice(5).trim();
-    } else if (line.startsWith("data:")) {
-      dataLines.push(line.slice(4).trim());
+    } else if (line.startsWith("data: ")) {
+      dataLines.push(line.slice(6));
     }
   }
 
@@ -311,5 +311,148 @@ function mapClaudeStopReason(reason: string): string {
     case "max_tokens": return "length";
     case "tool_use":   return "tool_calls";
     default:           return "stop";
+  }
+}
+
+/**
+ * Convert a non-streaming OpenAI response to Claude message format.
+ * (Inverse of convertClaudeResponseToOpenAINonStream)
+ */
+export function convertOpenAIResponseToClaudeNonStream(
+  _ctx: unknown,
+  _modelName: string,
+  _originalRequestRaw: Uint8Array,
+  _requestRaw: Uint8Array,
+  raw: Uint8Array
+): Uint8Array {
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(new TextDecoder().decode(raw));
+  } catch {
+    return raw;
+  }
+
+  const out: Record<string, unknown> = {
+    id: parsed.id ?? "",
+    type: "message",
+    role: "assistant",
+    model: parsed.model ?? "",
+    content: [] as unknown[],
+    stop_reason: null,
+    stop_sequence: null,
+    usage: { input_tokens: 0, output_tokens: 0 },
+  };
+
+  const choice = (parsed.choices as Array<Record<string, unknown>> | undefined)?.[0];
+  if (!choice) return raw;
+
+  const finishReason = choice.finish_reason as string | undefined;
+  out.stop_reason = mapFinishReason(finishReason ?? "");
+
+  const message = choice.message as Record<string, unknown> | undefined;
+  if (message) {
+    // reasoning_content → thinking blocks
+    const reasoning = message.reasoning_content;
+    if (reasoning) {
+      for (const text of collectReasoningTexts(reasoning)) {
+        (out.content as unknown[]).push({ type: "thinking", thinking: text });
+      }
+    }
+
+    // content → text blocks
+    const content = message.content;
+    if (typeof content === "string" && content) {
+      (out.content as unknown[]).push({ type: "text", text: content });
+    } else if (Array.isArray(content)) {
+      for (const item of content) {
+        if (!item || typeof item !== "object") continue;
+        const obj = item as Record<string, unknown>;
+        const itemType = obj.type as string;
+        if (itemType === "text") {
+          const text = obj.text as string | undefined;
+          if (text) (out.content as unknown[]).push({ type: "text", text });
+        } else if (itemType === "tool_calls") {
+          const calls = obj.tool_calls as Array<Record<string, unknown>> | undefined;
+          if (Array.isArray(calls)) {
+            for (const tc of calls) {
+              const fn = tc.function as Record<string, unknown>;
+              const argsRaw = fn?.arguments as string | undefined;
+              let input: Record<string, unknown> = {};
+              if (argsRaw) {
+                try { input = JSON.parse(argsRaw); } catch { /* ignore */ }
+              }
+              (out.content as unknown[]).push({
+                type: "tool_use",
+                id: tc.id as string ?? "",
+                name: fn?.name ?? "",
+                input,
+              });
+            }
+          }
+        }
+      }
+    }
+
+    // tool_calls (raw OpenAI format) → tool_use blocks
+    const rawToolCalls = message.tool_calls as Array<Record<string, unknown>> | undefined;
+    if (Array.isArray(rawToolCalls)) {
+      for (const tc of rawToolCalls) {
+        const fn = tc.function as Record<string, unknown>;
+        const argsRaw = fn?.arguments as string | undefined;
+        let input: Record<string, unknown> = {};
+        if (argsRaw) {
+          try { input = JSON.parse(argsRaw); } catch { /* ignore */ }
+        }
+        (out.content as unknown[]).push({
+          type: "tool_use",
+          id: tc.id as string ?? "",
+          name: fn?.name ?? "",
+          input,
+        });
+      }
+    }
+  }
+
+  // usage
+  const usage = parsed.usage as Record<string, unknown> | undefined;
+  if (usage) {
+    (out.usage as Record<string, unknown>).input_tokens = (usage.prompt_tokens as number) ?? 0;
+    (out.usage as Record<string, unknown>).output_tokens = (usage.completion_tokens as number) ?? 0;
+  }
+
+  return new TextEncoder().encode(JSON.stringify(out));
+}
+
+function collectReasoningTexts(node: unknown): string[] {
+  const result: string[] = [];
+  if (!node) return result;
+  if (typeof node === "string") {
+    if (node.trim()) result.push(node.trim());
+    return result;
+  }
+  if (Array.isArray(node)) {
+    for (const item of node) result.push(...collectReasoningTexts(item));
+    return result;
+  }
+  if (typeof node === "object" && node) {
+    const obj = node as Record<string, unknown>;
+    if (obj.text) {
+      const text = obj.text as string;
+      if (text.trim()) result.push(text.trim());
+    } else if (obj.reasoning_content) {
+      result.push(...collectReasoningTexts(obj.reasoning_content));
+    }
+  }
+  return result;
+}
+
+function mapFinishReason(reason: string): string {
+  switch (reason) {
+    case "stop":          return "end_turn";
+    case "length":        return "max_tokens";
+    case "tool_calls":     return "tool_use";
+    case "content_filter": return "end_turn";
+    case "function_call":  return "tool_use";
+    default:               return "end_turn";
   }
 }

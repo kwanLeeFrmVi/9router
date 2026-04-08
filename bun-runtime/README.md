@@ -1,4 +1,4 @@
-# 9router — Self-Hosted AI API Router
+# bun-llm-proxy — Self-Hosted AI API Router
 
 A fast, self-hosted AI gateway built with **Bun** that proxies OpenAI-compatible requests to multiple AI providers (OpenAI, Anthropic Claude, Google Gemini, Ollama). Designed for single-machine deployments with a local SQLite database, a web dashboard, and a clean OpenAI-compatible API surface.
 
